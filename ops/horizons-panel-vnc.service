@@ -1,0 +1,15 @@
+[Unit]
+Description=Horizons noVNC token proxy
+After=horizons-panel-browser-bridge.service
+Requires=horizons-panel-browser-bridge.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/websockify --web=/opt/noVNC --token-plugin TokenFile --token-source /root/horizons-app/.automation/panel-browser/vnc-tokens.cfg 172.17.0.1:6080
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

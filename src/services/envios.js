@@ -1,27 +1,16 @@
 import { formatCurrency } from '@/utils/formatters';
 import { logEvent, LOG_LEVELS } from './logs';
 import { normalizeToE164 } from '@/utils/phone';
+import { supabase } from '@/lib/customSupabaseClient';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
-
-// W-API Configuration
-const WAPI_BASE_URL = 'https://api.w-api.app/v1';
 
 // Helper to wait
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Deprecated: Only used for fallback if config not passed
-export const getWApiConfig = () => {
-  const stored = localStorage.getItem('api_configs');
-  return stored ? JSON.parse(stored) : null;
-};
-
-export const validateCredentials = (config) => {
-  if (!config || !config.wapi_instance_id || !config.wapi_token) {
-    throw new Error('Credenciais da W-API não estão configuradas corretamente.');
-  }
-};
+export const validateCredentials = () => undefined;
 
 /**
  * Renders the message template with client data.
@@ -121,58 +110,26 @@ export const getSegmentClients = (segment, filterValue) => {
 };
 
 export const sendSingleMessage = async (phone, message, config, contextInfo = 'Direct Send', imageUrl = null) => {
-  // If config is not passed, try to get from localStorage (legacy fallback)
-  const effectiveConfig = config || getWApiConfig();
-  
-  validateCredentials(effectiveConfig);
-
   if (!message || message.trim().length === 0) {
       throw new Error('Mensagem vazia. O envio foi abortado.');
   }
+  if (imageUrl) throw new Error('Envio de imagem pela Evolution ainda não foi configurado.');
 
-  const { wapi_instance_id, wapi_token } = effectiveConfig;
   
   const originalPhone = phone;
   const normalizedPhone = normalizeToE164(phone);
-  
-  // Determine if we are sending text only or text + image
-  const isImageMessage = !!imageUrl;
-  
-  const url = isImageMessage 
-    ? `${WAPI_BASE_URL}/message/send-image?instanceId=${wapi_instance_id}`
-    : `${WAPI_BASE_URL}/message/send-text?instanceId=${wapi_instance_id}`;
-  
-  const requestBody = {
-    phone: normalizedPhone,
-    // W-API usually expects 'image' for image url and 'caption' for the text when sending media
-    ...(isImageMessage ? { image: imageUrl, caption: message } : { message: message })
-  };
 
-  const safeHeaders = {
-    'Content-Type': 'application/json',
-    'Authorization': 'Bearer [HIDDEN_TOKEN]'
-  };
-
-  logEvent(LOG_LEVELS.INFO, 'api_request', wapi_instance_id, `Initiating W-API request (${contextInfo})`, {
-    url,
-    method: 'POST',
-    phone_original: originalPhone,
-    phone_normalized: normalizedPhone,
-    message_type: isImageMessage ? 'image' : 'text',
-    message_content: message,
-    image_url: imageUrl,
-    wapi_request_body: requestBody,
-    wapi_request_headers: safeHeaders
-  });
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error('Sua sessão expirou. Entre novamente para enviar mensagens.');
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch('/api/whatsapp/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${wapi_token}`
+        'Authorization': `Bearer ${session.access_token}`
       },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify({ phone: normalizedPhone, message })
     });
 
     let responseData;
@@ -184,37 +141,13 @@ export const sendSingleMessage = async (phone, message, config, contextInfo = 'D
       responseData = { raw: responseText, parse_error: 'Could not parse JSON response' };
     }
 
-    const responseHeaders = {};
-    response.headers.forEach((val, key) => responseHeaders[key] = val);
-
-    const logDetails = {
-      phone_original: originalPhone,
-      phone_normalized: normalizedPhone,
-      wapi_response_status: response.status,
-      wapi_response_status_text: response.statusText,
-      wapi_response_headers: responseHeaders,
-      wapi_response_body: responseData
-    };
-
     if (!response.ok) {
-      logEvent(LOG_LEVELS.ERROR, 'api_response', wapi_instance_id, `W-API Error Response (${contextInfo})`, logDetails);
       const errorMessage = responseData?.error?.message || responseData?.message || response.statusText;
       throw new Error(`API Error ${response.status}: ${errorMessage}`);
     }
-
-    logEvent(LOG_LEVELS.INFO, 'api_response', wapi_instance_id, `W-API Success Response (${contextInfo})`, logDetails);
-
     return responseData;
 
   } catch (error) {
-    if (!error.message.startsWith('API Error')) {
-      logEvent(LOG_LEVELS.ERROR, 'network_error', wapi_instance_id, `Network/CORS Error (${contextInfo})`, {
-        error_message: error.message,
-        error_stack: error.stack,
-        phone_target: normalizedPhone,
-        original_url: url
-      });
-    }
     throw error;
   }
 };
@@ -240,18 +173,7 @@ const sendWithRetry = async (phone, message, config, clientName, imageUrl, attem
  * @param {Object} userConfig - OPTIONAL: Configuration object from Context. If null, tries localStorage.
  */
 export const processCampaign = async (campaign, clients, onProgress, userConfig = null) => {
-  // Try to use passed config (preferred) or fallback to localStorage
-  let config = userConfig;
-  if (!config) {
-     config = getWApiConfig(); 
-  }
-  
-  try {
-    validateCredentials(config);
-  } catch (err) {
-    logEvent(LOG_LEVELS.ERROR, 'campanha', campaign.id, 'Campaign failed to start: Missing Config', {});
-    throw err;
-  }
+  const config = userConfig;
 
   logEvent(LOG_LEVELS.INFO, 'campanha', campaign.id, 'Starting Campaign Execution', {
     total_clients: clients.length,
@@ -324,7 +246,7 @@ export const processCampaign = async (campaign, clients, onProgress, userConfig 
       
       envioRecord.status = 'entregue';
       envioRecord.sent_at = new Date().toISOString();
-      envioRecord.wapi_message_id = result.id || result.messageId || 'mock_id';
+      envioRecord.wapi_message_id = result.messageId || 'accepted';
       successCount++;
       
       logEvent(LOG_LEVELS.INFO, 'envio', envioRecord.id, `Message delivered to ${clientName}`, {

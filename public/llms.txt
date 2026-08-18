@@ -1,0 +1,24 @@
+## Pages
+- [Assistente administrativo - Horizons](/assistenteadmin): No description available
+- [Campanhas - Admin Panel](/campanhas): Gerenciar campanhas de mensagens WhatsApp
+- [Captação - Horizons](/captacao): No description available
+- [Clientes - Admin](/clientes): No description available
+- [Cobranças Pix - Horizons](/cobrancaspix): No description available
+- [Conexões de Painéis - Horizons](/conexoespaineis): No description available
+- [Configurações - Admin Panel](/configuracoes): Configurações do sistema
+- [Criar Conta - Admin Panel](/register): Crie sua conta para acessar o painel administrativo
+- [Dashboard - Admin Panel](/dashboard): No description available
+- [Importação - Admin Panel](/importacao): Importar clientes em massa
+- [Indicações - Horizons](/indicacoes): No description available
+- [Login - Admin Panel](/login): Faça login no painel administrativo
+- [Logs do Sistema - Admin Panel](/logs): Monitore eventos e erros da aplicação
+- [Manuais de Instalação - Horizons](/manuaisinstalacao): No description available
+- [Operações de Painéis - Horizons](/operacoespaineis): No description available
+- [Planos - Admin Panel](/planos): No description available
+- [Possíveis Clientes - Admin Panel](/prospects): No description available
+- [Procedimentos dos Painéis - Horizons](/procedimentospaineis): No description available
+- [Renovações - Horizons](/renovacoes): No description available
+- [Reparar Telefones - Admin](/phonenumberrepair): No description available
+- [Servidores - Admin Panel](/servidores): No description available
+- [Templates - Admin Panel](/templates): Gerenciar templates de mensagens
+- [Testes - Horizons](/testes): No description available

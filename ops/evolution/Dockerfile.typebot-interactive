@@ -1,0 +1,3 @@
+FROM evoapicloud/evolution-api:2.4.0-rc2
+COPY typebot-interactive.patch.mjs /tmp/typebot-interactive.patch.mjs
+RUN node /tmp/typebot-interactive.patch.mjs && rm /tmp/typebot-interactive.patch.mjs

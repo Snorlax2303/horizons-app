@@ -1,0 +1,16 @@
+[Unit]
+Description=Horizons manual panel browser bridge
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/horizons-app
+EnvironmentFile=/root/horizons-app/.env
+ExecStart=/usr/bin/python3 /root/horizons-app/server/panel_browser_bridge.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

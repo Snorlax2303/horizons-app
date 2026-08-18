@@ -10,6 +10,17 @@ import Importacao from '@/pages/Importacao';
 import Configuracoes from '@/pages/Configuracoes';
 import Servidores from '@/pages/Servidores';
 import Prospects from '@/pages/Prospects';
+import ConexoesPaineis from '@/pages/ConexoesPaineis';
+import OperacoesPaineis from '@/pages/OperacoesPaineis';
+import Captacao from '@/pages/Captacao';
+import Indicacoes from '@/pages/Indicacoes';
+import ProcedimentosPaineis from '@/pages/ProcedimentosPaineis';
+import Testes from '@/pages/Testes';
+import ManuaisInstalacao from '@/pages/ManuaisInstalacao';
+import CobrancasPix from '@/pages/CobrancasPix';
+import Renovacoes from '@/pages/Renovacoes';
+import AssistenteAdmin from '@/pages/AssistenteAdmin';
+import CentralOperacional from '@/pages/CentralOperacional';
 import KeepAliveMonitor from '@/components/Common/KeepAliveMonitor';
 
 const MainLayout = () => {
@@ -39,6 +50,28 @@ const MainLayout = () => {
         return <Servidores />;
       case 'prospects':
         return <Prospects />;
+      case 'testes':
+        return <Testes />;
+      case 'manuais':
+        return <ManuaisInstalacao />;
+      case 'conexoes':
+        return <ConexoesPaineis />;
+      case 'operacoes':
+        return <OperacoesPaineis />;
+      case 'procedimentos':
+        return <ProcedimentosPaineis />;
+      case 'captacao':
+        return <Captacao />;
+      case 'indicacoes':
+        return <Indicacoes />;
+      case 'cobrancas':
+        return <CobrancasPix />;
+      case 'renovacoes':
+        return <Renovacoes />;
+      case 'assistente':
+        return <AssistenteAdmin />;
+      case 'central':
+        return <CentralOperacional />;
       case 'planos':
         return <Planos />;
       case 'templates':

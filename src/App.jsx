@@ -18,6 +18,7 @@ import Importacao from '@/pages/Importacao';
 import Prospects from '@/pages/Prospects';
 import MainLayout from '@/components/Layout/MainLayout';
 import LoadingSpinner from '@/components/Common/LoadingSpinner';
+import LeadPublico from '@/pages/LeadPublico';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -91,6 +92,7 @@ function App() {
             <KeepAliveProvider>
               <BrowserRouter>
                 <Routes>
+                  <Route path="/lead" element={<LeadPublico />} />
                   <Route 
                     path="/login" 
                     element={

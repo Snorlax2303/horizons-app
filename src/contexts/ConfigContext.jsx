@@ -17,7 +17,6 @@ export const ConfigProvider = ({ children }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [apiConfigs, setApiConfigs] = useState({
-    wapi: { wapi_instance_id: '', wapi_token: '' },
     groq: { api_key: '' }
   });
   const [loading, setLoading] = useState(true);
@@ -28,7 +27,6 @@ export const ConfigProvider = ({ children }) => {
     } else {
       // Clear configs on logout
       setApiConfigs({
-        wapi: { wapi_instance_id: '', wapi_token: '' },
         groq: { api_key: '' }
       });
       setLoading(false);
@@ -46,15 +44,12 @@ export const ConfigProvider = ({ children }) => {
       if (error) throw error;
 
       const newConfigs = { 
-        wapi: { wapi_instance_id: '', wapi_token: '' },
         groq: { api_key: '' }
       };
       
       if (data) {
         data.forEach(item => {
-          if (item.provider === 'wapi') {
-            newConfigs.wapi = { ...newConfigs.wapi, ...item.config_data };
-          } else if (item.provider === 'groq') {
+          if (item.provider === 'groq') {
             newConfigs.groq = { ...newConfigs.groq, ...item.config_data };
           }
         });

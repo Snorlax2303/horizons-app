@@ -1,7 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://acmpfccutihuppfraita.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjbXBmY2N1dGlodXBwZnJhaXRhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYwMTc3ODAsImV4cCI6MjA4MTU5Mzc4MH0.6EDqVoBFOs0a8UieGmz2XQZuHjUyYDWSJ74B0b_91TQ';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY antes de iniciar o painel.');
+}
 
 const customSupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 

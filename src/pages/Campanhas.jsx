@@ -539,7 +539,7 @@ const Campanhas = () => {
         (current, total, message) => {
            setProgress({ current, total, message });
         },
-        apiConfigs?.wapi
+        null
       );
 
       const finalStatus = result.failCount > 0 

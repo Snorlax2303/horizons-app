@@ -10,15 +10,31 @@ import {
   Settings,
   X,
   Server,
-  UserPlus
+  UserPlus,
+  Link2,
+  ClipboardList,
+  Megaphone,
+  Gift, CreditCard
+  ,BookOpen, TestTube2, BookOpenCheck, ReceiptText, Bot, Gauge
 } from 'lucide-react';
 
 const Sidebar = ({ currentPage, onNavigate, isOpen, onClose }) => {
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'central', label: 'Central Operacional', icon: Gauge },
     { id: 'clientes', label: 'Clientes', icon: Users },
     { id: 'prospects', label: 'Possíveis Clientes', icon: UserPlus },
+    { id: 'testes', label: 'Testes', icon: TestTube2 },
+    { id: 'manuais', label: 'Manuais', icon: BookOpenCheck },
+    { id: 'captacao', label: 'Captação', icon: Megaphone },
+    { id: 'indicacoes', label: 'Indicações', icon: Gift },
+    { id: 'cobrancas', label: 'Cobranças Pix', icon: CreditCard },
+    { id: 'renovacoes', label: 'Renovações', icon: ReceiptText },
+    { id: 'assistente', label: 'Assistente IA', icon: Bot },
     { id: 'servidores', label: 'Servidores', icon: Server },
+    { id: 'conexoes', label: 'Conexões de Painéis', icon: Link2 },
+    { id: 'operacoes', label: 'Operações', icon: ClipboardList },
+    { id: 'procedimentos', label: 'Procedimentos', icon: BookOpen },
     { id: 'planos', label: 'Planos', icon: Package },
     { id: 'templates', label: 'Templates', icon: FileText },
     { id: 'campanhas', label: 'Campanhas', icon: Send },

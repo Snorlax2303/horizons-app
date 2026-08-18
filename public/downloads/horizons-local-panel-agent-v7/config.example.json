@@ -1,0 +1,7 @@
+{
+  "apiUrl": "https://iptv.velhaturbo.cloud/api",
+  "agentId": "COLE_O_ID_DO_AGENTE",
+  "enrollmentToken": "COLE_O_TOKEN_EXIBIDO_UMA_UNICA_VEZ",
+  "pollIntervalSeconds": 5,
+  "allowedHosts": ["escritorio-virtual.xyz"]
+}

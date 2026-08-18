@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Helmet } from 'react-helmet';
-import { Plus, Edit2, Trash2, MoreVertical, CheckCircle2, XCircle, RefreshCw, Smartphone, Server } from 'lucide-react';
+import { Plus, Edit2, Trash2, MoreVertical, CheckCircle2, XCircle, RefreshCw, Smartphone, Server, KeyRound } from 'lucide-react';
 import Button from '@/components/Common/Button';
 import Input from '@/components/Common/Input';
 import Table from '@/components/Common/Table';
@@ -10,6 +10,7 @@ import PaginationControls from '@/components/Common/PaginationControls';
 import FilterBar from '@/components/Clients/FilterBar';
 import ServerSelectionModal from '@/components/Common/ServerSelectionModal';
 import ServerTagsDisplay from '@/components/Clients/ServerTagsDisplay';
+import CustomerServerAccessModal from '@/components/Clients/CustomerServerAccessModal';
 import { formatPhoneDisplay } from '@/utils/formatters';
 import { validateRequired } from '@/utils/validators';
 import { useToast as useToastNotification } from '@/hooks/useToast';
@@ -49,6 +50,7 @@ const Clientes = () => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
+  const [isAccessModalOpen, setIsAccessModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState('create');
   const [saving, setSaving] = useState(false);
   const [selectedCliente, setSelectedCliente] = useState(null);
@@ -193,6 +195,12 @@ const Clientes = () => {
     captureScrollPosition();
     setSelectedCliente(cliente);
     setIsServerModalOpen(true);
+  };
+
+  const handleOpenAccessModal = (cliente) => {
+    captureScrollPosition();
+    setSelectedCliente(cliente);
+    setIsAccessModalOpen(true);
   };
 
   const handleOpenDeleteModal = (cliente) => {
@@ -424,6 +432,7 @@ const Clientes = () => {
             <DropdownMenuTrigger asChild><button className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full text-gray-500 dark:text-gray-400 outline-none"><MoreVertical className="w-4 h-4" /></button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => handleOpenEdit(row)} className="gap-2"><Edit2 className="w-4 h-4" /> Editar</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleOpenAccessModal(row)} className="gap-2"><KeyRound className="w-4 h-4" /> Gerenciar acesso</DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleOpenServerModal(row)} className="gap-2"><Server className="w-4 h-4" /> Gerenciar Servidores</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => handleOpenDeleteModal(row)} className="gap-2 text-red-600"><Trash2 className="w-4 h-4" /> Excluir</DropdownMenuItem>
@@ -561,6 +570,13 @@ const Clientes = () => {
            onConfirm={handleServerSave}
            initialSelectedIds={selectedCliente?.server_ids || []}
            servers={servers}
+        />
+        <CustomerServerAccessModal
+          isOpen={isAccessModalOpen}
+          onClose={() => setIsAccessModalOpen(false)}
+          customer={selectedCliente}
+          onSaved={fetchClientes}
+          notify={{ success, error: toastError }}
         />
       </div>
     </>

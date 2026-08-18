@@ -1,0 +1,9 @@
+.git/
+node_modules/
+dist/
+.automation/
+local-panel-agent/
+.env
+.env.local
+.env.*.local
+npm-debug.log*

@@ -476,6 +476,40 @@ const Prospects = () => {
 
       if (phoneErr) throw phoneErr;
 
+      // Preserve referral attribution before the prospect record is removed.
+      // A reward only becomes eligible when the first payment webhook arrives.
+      if (selectedProspect.referral_link_id) {
+        const { data: referralLink, error: referralError } = await supabase
+          .from('referral_links')
+          .select('id,reward_value')
+          .eq('id', selectedProspect.referral_link_id)
+          .maybeSingle();
+        if (referralError) console.warn('Falha ao localizar indicação:', referralError);
+        if (referralLink) {
+          const { data: referralSettings } = await supabase
+            .from('referral_program_settings')
+            .select('first_month_discount')
+            .eq('user_id', user.id)
+            .maybeSingle();
+          const { error: rewardError } = await supabase.from('referral_rewards').upsert({
+            user_id: user.id,
+            referral_link_id: referralLink.id,
+            referred_customer_id: customer.id,
+            reward_value: referralLink.reward_value,
+            status: 'pending'
+          }, { onConflict: 'referred_customer_id', ignoreDuplicates: true });
+          if (rewardError) console.warn('Falha ao criar recompensa de indicação:', rewardError);
+          const { error: offerError } = await supabase.from('customer_referral_offers').upsert({
+            user_id: user.id,
+            customer_id: customer.id,
+            referral_link_id: referralLink.id,
+            first_month_discount: referralSettings?.first_month_discount ?? 5,
+            status: 'pending'
+          }, { onConflict: 'customer_id', ignoreDuplicates: true });
+          if (offerError) console.warn('Falha ao criar oferta de primeira mensalidade:', offerError);
+        }
+      }
+
       // 3. Delete Prospect
       const { error: delErr } = await supabase
         .from('prospects')
