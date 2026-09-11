@@ -1,6 +1,5 @@
 ## Pages
 - [Assistente administrativo - Horizons](/assistenteadmin): No description available
-- [Campanhas - Admin Panel](/campanhas): Gerenciar campanhas de mensagens WhatsApp
 - [Captação - Horizons](/captacao): No description available
 - [Clientes - Admin](/clientes): No description available
 - [Cobranças Pix - Horizons](/cobrancaspix): No description available
@@ -20,5 +19,4 @@
 - [Renovações - Horizons](/renovacoes): No description available
 - [Reparar Telefones - Admin](/phonenumberrepair): No description available
 - [Servidores - Admin Panel](/servidores): No description available
-- [Templates - Admin Panel](/templates): Gerenciar templates de mensagens
 - [Testes - Horizons](/testes): No description available

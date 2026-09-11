@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet';
 import { motion, Reorder } from 'framer-motion';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { 
   Users, Package, Calendar, TrendingUp, MessageSquare, 
   AlertCircle, DollarSign, CheckCircle2, Clock, Settings,
@@ -12,6 +13,7 @@ import Modal from '@/components/Common/Modal';
 import LoadingSpinner from '@/components/Common/LoadingSpinner';
 import { formatCurrency } from '@/utils/formatters';
 import { supabase } from '@/lib/customSupabaseClient';
+import { horizonsApi } from '@/services/horizonsApi';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/components/ui/use-toast';
 
@@ -56,7 +58,9 @@ const DEFAULT_PANELS = [
   { id: 'pending_tasks', title: 'Pendências', visible: true, type: 'metric' },
   { id: 'total_registered', title: 'Total Cadastrado', visible: true, type: 'metric' },
   { id: 'upcoming_expiries', title: 'Próximos Vencimentos', visible: true, type: 'full' },
-  { id: 'operation_summary', title: 'Resumo da Operação', visible: true, type: 'full' }
+  { id: 'operation_summary', title: 'Resumo da Operação', visible: true, type: 'full' },
+  { id: 'billing_summary', title: 'Resumo Financeiro', visible: true, type: 'full' },
+  { id: 'billing_trends', title: 'Tendências (últimos 30 dias)', visible: true, type: 'full' }
 ];
 
 const fetchWithRetry = async (operation, retries = 3, delay = 1000) => {
@@ -86,7 +90,9 @@ const Dashboard = () => {
     paidRevenue: 0,
     pendingRevenue: 0,
     totalCampaigns: 0,
-    upcomingExpiries: []
+    upcomingExpiries: [],
+    billing: { customers: [], loaded: false },
+    trends: { series: [], total: 0, days: 30, loaded: false }
   });
 
   // Layout State
@@ -222,7 +228,9 @@ const Dashboard = () => {
 
         setStats({
           totalClients, activeClients, totalRevenue, paidRevenue, pendingRevenue,
-          totalCampaigns: campaignsCount || 0, upcomingExpiries: upcoming
+          totalCampaigns: campaignsCount || 0, upcomingExpiries: upcoming,
+          billing: await fetchWithRetry(() => horizonsApi('/billing/overview')).then((data) => ({ customers: data.customers || [], loaded: true })).catch(() => ({ customers: [], loaded: false })),
+          trends: await fetchWithRetry(() => horizonsApi('/billing/trends?days=30')).then((data) => ({ series: data.series || [], total: data.total || 0, days: data.days || 30, loaded: true })).catch(() => ({ series: [], total: 0, days: 30, loaded: false }))
         });
       });
     } catch (err) {
@@ -376,6 +384,40 @@ const Dashboard = () => {
                 </div>
             </div>
          </Card>
+      );
+    }
+    if (id === 'billing_summary') {
+      const customers = stats.billing?.customers || [];
+      const checkout = customers.filter((item) => item.payment_method === 'checkout').length;
+      const pix = customers.filter((item) => item.payment_method === 'pix').length;
+      const manual = customers.filter((item) => item.payment_method === 'manual').length;
+      const recovery = customers.filter((item) => item.recovery && ['pending', 'reminded'].includes(item.recovery.status)).length;
+      const incomplete = customers.filter((item) => !item.credentials_complete).length;
+      const expected = customers.filter((item) => item.status === 'active').reduce((sum, item) => sum + Number(item.value || 0), 0);
+      return (
+        <Card>
+          <div className="flex items-center justify-between mb-4"><div className="flex items-center gap-2"><DollarSign className="w-5 h-5 text-emerald-500" /><h2 className="text-lg md:text-xl font-bold text-gray-900 dark:text-gray-100">Resumo Financeiro</h2></div>{!stats.billing?.loaded && <span className="text-xs text-gray-400">Indisponível</span>}</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="rounded-lg border p-3"><p className="text-xs text-gray-500">Com checkout</p><p className="mt-1 text-xl font-bold">{checkout}</p></div>
+            <div className="rounded-lg border p-3"><p className="text-xs text-gray-500">Pix por comprovante</p><p className="mt-1 text-xl font-bold">{pix}</p></div>
+            <div className="rounded-lg border p-3"><p className="text-xs text-gray-500">Manual</p><p className="mt-1 text-xl font-bold">{manual}</p></div>
+            <div className="rounded-lg border border-rose-200 p-3"><p className="text-xs text-gray-500">Em recuperação</p><p className="mt-1 text-xl font-bold text-rose-600">{recovery}</p></div>
+            <div className="rounded-lg border border-amber-200 p-3"><p className="text-xs text-gray-500">Credenciais incompletas</p><p className="mt-1 text-xl font-bold text-amber-600">{incomplete}</p></div>
+            <div className="rounded-lg border p-3"><p className="text-xs text-gray-500">Mensalidade esperada</p><p className="mt-1 text-lg font-bold">{formatCurrency(expected)}</p></div>
+          </div>
+        </Card>
+      );
+    }
+    if (id === 'billing_trends') {
+      const series = stats.trends?.series || [];
+      const total = stats.trends?.total || 0;
+      const days = stats.trends?.days || 30;
+      const chartData = series.map((item) => ({ day: item.day.slice(5), valor: Number(item.amount.toFixed(2)) }));
+      return (
+        <Card>
+          <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-500" /><h2 className="text-lg md:text-xl font-bold text-gray-900 dark:text-gray-100">Pagamentos confirmados ({days} dias)</h2></div><span className="text-xs bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 px-2 py-1 rounded-full">{formatCurrency(total)}</span></div>
+          {chartData.length > 1 ? <ResponsiveContainer width="100%" height={220}><LineChart data={chartData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="day" /><YAxis /><Tooltip formatter={(value) => formatCurrency(value)} /><Line type="monotone" dataKey="valor" stroke="#10b981" strokeWidth={2} dot={false} /></LineChart></ResponsiveContainer> : <p className="py-8 text-center text-sm text-gray-500">Sem pagamentos confirmados no período para exibir tendência.</p>}
+        </Card>
       );
     }
     return null;

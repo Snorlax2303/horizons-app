@@ -21,6 +21,7 @@ import {
 const Servidores = () => {
   const { user } = useAuth();
   const [servers, setServers] = useState([]);
+  const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -54,6 +55,13 @@ const Servidores = () => {
 
       if (err) throw err;
       setServers(data || []);
+      const { data: catalogData, error: catalogError } = await supabase
+        .from('cinehub_servers')
+        .select('id,code,name,provider,active,is_default_trial')
+        .eq('user_id', user.id)
+        .order('name');
+      if (catalogError) throw catalogError;
+      setCatalog(catalogData || []);
     } catch (err) {
       console.error('Erro ao buscar servidores:', err);
       error('Erro', 'Falha ao carregar lista de servidores.');
@@ -195,6 +203,19 @@ const Servidores = () => {
       </Helmet>
 
       <div className="space-y-6">
+        <section className="rounded-xl border bg-white p-5 dark:bg-gray-800">
+          <h2 className="mb-1 text-lg font-semibold">Catálogo operacional (testes e acessos)</h2>
+          <p className="mb-4 text-sm text-gray-500">Servidores usados em testes, entrega de acessos e migrações. Este catálogo é sincronizado com os endpoints protegidos.</p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {catalog.map((item) => (
+              <div key={item.id} className="rounded-lg border p-3">
+                <div className="flex items-center justify-between gap-2"><span className="font-medium">{item.name}</span><span className={`rounded-full px-2 py-1 text-xs ${item.is_default_trial ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>{item.is_default_trial ? 'Teste padrão' : item.active ? 'Ativo' : 'Inativo'}</span></div>
+                <p className="mt-1 text-xs text-gray-500">Código: <code>{item.code}</code> · Provider: <code>{item.provider}</code></p>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Servidores IPTV</h1>

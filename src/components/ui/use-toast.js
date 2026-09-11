@@ -96,8 +96,13 @@ export function useToast() {
     }
   }, [state.toasts])
 
+  const notify = (title, description, variant) => toast({ title, description, variant });
+
   return {
     toast,
     toasts: state.toasts,
+    success: (title, description) => notify(title, description),
+    error: (title, description) => notify(title, description, 'destructive'),
+    info: (title, description) => notify(title, description),
   }
 }

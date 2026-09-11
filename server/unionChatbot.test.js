@@ -8,6 +8,7 @@ test('rejects a panel homepage as checkout and accepts a referenced payment URL'
   assert.equal(isUsableCinehubCheckoutUrl('https://painelcinehub.top/checkout/order-123'), true);
   assert.equal(isUsableCinehubCheckoutUrl('https://painelcinehub.top/?reference=order-123'), true);
   assert.equal(isUsableCinehubCheckoutUrl('https://example.com/checkout/order-123'), false);
+  assert.equal(isUsableCinehubCheckoutUrl('https://revenda-eliteiptv.online/checkout/order-123'), true);
 });
 
 test('keeps provider DNS when the reply confirms the same host', () => {

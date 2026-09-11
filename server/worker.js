@@ -4,12 +4,58 @@ import { getConfig } from './config.js';
 import { createQueue } from './queue.js';
 import { buildPanelFlow } from './panelFlows.js';
 import { sendEvolutionText } from './evolution.js';
+import { composeDailyDigest, sendTelegramMessage } from './telegramDigest.js';
+import { composeRenewalListMessage, loadWhatsappRenewalItems } from './routes/renewalList.js';
+import { openAccessValue } from './accessVault.js';
 
 const config = getConfig();
 const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
-const { connection } = createQueue(config.redisUrl);
+const { connection, automationQueue } = createQueue(config.redisUrl);
+
+function workerEvent(event, fields = {}) {
+  console.info(JSON.stringify({ event: `worker_${event}`, ...fields }));
+}
+
+const telegramDigestEnabled = process.env.HORIZONS_TELEGRAM_DAILY_DIGEST_ENABLED === 'true';
+const telegramDigestCron = process.env.HORIZONS_TELEGRAM_DAILY_DIGEST_CRON || '0 8 * * *';
+
+if (telegramDigestEnabled) {
+  await automationQueue.add('telegram-daily-digest', {}, {
+    repeat: { pattern: telegramDigestCron },
+    jobId: 'telegram-daily-digest-repeat',
+    removeOnComplete: 100,
+    removeOnFail: 100,
+  });
+  workerEvent('telegram_digest_scheduled', { cron: telegramDigestCron });
+}
+
+const whatsappRenewalEnabled = process.env.HORIZONS_WHATSAPP_RENEWAL_ENABLED === 'true';
+const whatsappRenewalCron = process.env.HORIZONS_WHATSAPP_RENEWAL_LIST_CRON || '0 */2 * * *';
+
+if (whatsappRenewalEnabled) {
+  await automationQueue.add('whatsapp-renewal-list', {}, {
+    repeat: { pattern: whatsappRenewalCron },
+    jobId: 'whatsapp-renewal-list-repeat',
+    removeOnComplete: 100,
+    removeOnFail: 100,
+  });
+  workerEvent('whatsapp_renewal_list_scheduled', { cron: whatsappRenewalCron });
+}
+
+const staleCatalogEnabled = process.env.HORIZONS_STALE_CATALOG_CHECK_ENABLED === 'true';
+const staleCatalogCron = process.env.HORIZONS_STALE_CATALOG_CHECK_CRON || '0 3 * * 1';
+
+if (staleCatalogEnabled) {
+  await automationQueue.add('stale-delivery-profiles', {}, {
+    repeat: { pattern: staleCatalogCron },
+    jobId: 'stale-delivery-profiles-repeat',
+    removeOnComplete: 100,
+    removeOnFail: 100,
+  });
+  workerEvent('stale_catalog_scheduled', { cron: staleCatalogCron });
+}
 
 async function returnToManual(operationId, reason) {
   await supabase.from('panel_operations').update({
@@ -54,6 +100,45 @@ async function processPanelOperation(operationId) {
 }
 
 const worker = new Worker('iptv-automation', async (job) => {
+  const startedAt = Date.now();
+  const attempt = (job.attemptsMade || 0) + 1;
+  workerEvent('job_started', { job_id: job.id, job_name: job.name, attempt });
+  if (job.name === 'telegram-daily-digest') {
+    const text = await composeDailyDigest(supabase, config.horizonsOwnerUserId);
+    const chatId = config.telegramAdminAllowedUserIds[0];
+    const result = await sendTelegramMessage(config, chatId, text);
+    workerEvent('job_completed', { job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt, result });
+    return result;
+  }
+  if (job.name === 'whatsapp-renewal-list') {
+    const items = await loadWhatsappRenewalItems(supabase, config, config.horizonsOwnerUserId);
+    const text = composeRenewalListMessage(items);
+    if (!text || !config.horizonsWhatsappRenewalNumber || !config.evolutionApiUrl || !config.evolutionFinanceInstance || !config.evolutionApiKey) {
+      workerEvent('job_completed', { job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt, count: items.length, skipped: true });
+      return { skipped: true, count: items.length };
+    }
+    const phone = String(config.horizonsWhatsappRenewalNumber).replace(/\D/g, '');
+    const url = `${String(config.evolutionApiUrl).replace(/\/$/, '')}/message/sendText/${encodeURIComponent(config.evolutionFinanceInstance)}`;
+    const sendResponse = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: config.evolutionApiKey },
+      body: JSON.stringify({ number: phone, text, delay: 500 }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    workerEvent('job_completed', { job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt, count: items.length, status: sendResponse.status });
+    return { sent: sendResponse.ok, count: items.length, status: sendResponse.status };
+  }
+  if (job.name === 'stale-delivery-profiles') {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: expired, error } = await supabase.from('server_delivery_profiles')
+      .select('id').eq('user_id', config.horizonsOwnerUserId).eq('active', true).not('valid_until', 'is', null).lt('valid_until', today);
+    if (error) { workerEvent('job_error', { job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt, error: error.message }); throw error; }
+    const count = (expired || []).length;
+    if (count) await supabase.from('server_delivery_profiles').update({ active: false, updated_at: new Date().toISOString() }).in('id', (expired || []).map((row) => row.id));
+    workerEvent('job_completed', { job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt, deactivated: count });
+    return { deactivated: count };
+  }
+  try {
   if (job.name === 'trial-follow-up') {
     const { data: trial, error } = await supabase.from('union_direct_test_events')
       .select('id,phone,status,prospect_id').eq('id', job.data.trialEventId).maybeSingle();
@@ -79,10 +164,15 @@ const worker = new Worker('iptv-automation', async (job) => {
   await supabase.from('panel_operations').update({ status: 'processing', last_error: null })
     .eq('id', job.data.operationId).eq('status', 'queued');
   await processPanelOperation(job.data.operationId);
+  workerEvent('job_completed', { job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt });
+  } catch (error) {
+    workerEvent('job_error', { job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt, error: error.message });
+    throw error;
+  }
 }, { connection, concurrency: 1 });
 
 worker.on('failed', async (job, error) => {
-  console.error(`Job ${job?.id} falhou:`, error.message);
+  console.error(JSON.stringify({ event: 'worker_job_failed', job_id: job?.id, job_name: job?.name, attempts: job?.attemptsMade || 0, error: error.message }));
   if (job?.data?.operationId) await supabase.from('panel_operations').update({
     status: 'failed', last_error: error.message,
   }).eq('id', job.data.operationId);

@@ -7,7 +7,7 @@ export const cinehubDirectTestIsConfigured = unionDirectTestIsConfigured;
 export function isUsableCinehubCheckoutUrl(value) {
   try {
     const url = new URL(value);
-    const allowedHosts = new Set(['union.meugestor.top', 'painelcinehub.top']);
+    const allowedHosts = new Set(['union.meugestor.top', 'painelcinehub.top', 'revenda-eliteiptv.online']);
     if (url.protocol !== 'https:' || !allowedHosts.has(url.hostname)) return false;
     const hashCheckout = /^#\/checkout\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(url.hash);
     return hashCheckout || url.pathname !== '/' || url.searchParams.size > 0;
@@ -26,7 +26,7 @@ function testCatalog(config) {
   }
 }
 
-function testUrl(config, selection = {}) {
+export function testUrl(config, selection = {}) {
   const key = selection.server && selection.duration_hours && selection.content
     ? `${selection.server}:${selection.duration_hours}:${selection.content}`
     : null;
@@ -82,7 +82,7 @@ export function extractCinehubDeliveryProfile(reply) {
 export async function createUnionDirectTest(config, contact = {}, selection = {}) {
   if (!unionDirectTestIsConfigured(config)) throw new Error('URL de teste direto do CineHub não configurada.');
   const url = new URL(testUrl(config, selection));
-  const allowedHosts = new Set(['union.meugestor.top', 'painelcinehub.top']);
+  const allowedHosts = new Set(['union.meugestor.top', 'painelcinehub.top', 'revenda-eliteiptv.online']);
   if (url.protocol !== 'https:' || !allowedHosts.has(url.hostname) || !url.pathname.startsWith('/api/chatbot/')) {
     throw new Error('URL de teste direto do CineHub inválida.');
   }
