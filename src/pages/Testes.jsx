@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
-import { Plus, RefreshCw, TestTube2 } from 'lucide-react';
+import { Plus, RefreshCw, TestTube2, Tv } from 'lucide-react';
 import Button from '@/components/Common/Button';
 import Input from '@/components/Common/Input';
 import Modal from '@/components/Common/Modal';
@@ -22,6 +23,7 @@ const initialAssistedForm = { requester_phone: '', beneficiary_phone: '', benefi
 function providerOf(connection) { return String(connection?.provider || '').toLowerCase(); }
 
 export default function Testes() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { success, error } = useToastNotification();
   const [tests, setTests] = useState([]); const [prospects, setProspects] = useState([]); const [connections, setConnections] = useState([]);
@@ -125,7 +127,7 @@ export default function Testes() {
   return <>
     <Helmet><title>Testes - Horizons</title></Helmet>
     <div className="space-y-6">
-      <div className="flex flex-col justify-between gap-4 md:flex-row"><div><h1 className="text-3xl font-bold">Testes</h1><p className="mt-1 text-gray-600 dark:text-gray-400">Todo teste é de 1 tela. Testes para outra pessoa devem usar o telefone próprio do beneficiário.</p></div><div className="flex flex-wrap gap-2"><Button variant="secondary" icon={RefreshCw} onClick={load}>Atualizar</Button><Button variant="secondary" icon={TestTube2} onClick={() => setAssistedOpen(true)}>Teste assistido CineHub</Button><Button variant="primary" icon={Plus} onClick={() => setOpen(true)}>Registrar teste</Button></div></div>
+      <div className="flex flex-col justify-between gap-4 md:flex-row"><div><h1 className="text-3xl font-bold">Testes</h1><p className="mt-1 text-gray-600 dark:text-gray-400">Todo teste é de 1 tela. Testes para outra pessoa devem usar o telefone próprio do beneficiário.</p></div><div className="flex flex-wrap gap-2"><Button variant="secondary" icon={RefreshCw} onClick={load}>Atualizar</Button><Button variant="secondary" icon={Tv} onClick={() => navigate('/wplay')}>Painel WPlay</Button><Button variant="secondary" icon={TestTube2} onClick={() => setAssistedOpen(true)}>Teste assistido CineHub</Button><Button variant="primary" icon={Plus} onClick={() => setOpen(true)}>Registrar teste</Button></div></div>
       {assistedRequests.length > 0 && <section className="rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/20"><div className="border-b border-amber-200 p-4 dark:border-amber-800"><h2 className="font-semibold">Testes para outra pessoa aguardando revisão</h2><p className="mt-1 text-sm text-gray-600 dark:text-gray-300">Solicitações coletadas pelo WhatsApp. Nenhum acesso foi criado ainda.</p></div><div className="divide-y divide-amber-200 dark:divide-amber-800">{assistedRequests.map((item) => <article key={item.id} className="flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between"><div><p className="font-medium">{item.beneficiary_name} · {item.beneficiary_phone}</p><p className="text-sm text-gray-600 dark:text-gray-300">Solicitado por {item.requester_phone} · {new Date(item.created_at).toLocaleString('pt-BR')}</p>{item.error && <p className="mt-1 text-sm text-red-700 dark:text-red-300">Falha anterior: {item.error}</p>}</div><div className="flex gap-2"><Button variant="secondary" onClick={() => rejectAssistedRequest(item)}>Recusar</Button><Button variant="primary" onClick={() => reviewAssistedRequest(item)}>Revisar e criar</Button></div></article>)}</div></section>}
       <div className="overflow-x-auto rounded-xl border bg-white dark:bg-gray-800"><table className="w-full text-sm"><thead className="border-b text-left text-gray-500"><tr><th className="p-4">Cliente</th><th className="p-4">Painel</th><th className="p-4">Perfil</th><th className="p-4">Status</th><th className="p-4">Validade</th></tr></thead><tbody>{tests.map((test) => <tr key={test.id} className="border-b last:border-0"><td className="p-4 font-medium">{test.prospects?.name || test.client_reference || '—'}<span className="block text-xs font-normal text-gray-500">{test.external_username || test.prospects?.phone || ''}</span></td><td className="p-4">{test.panel_connections?.name || test.panel_provider}</td><td className="p-4">{test.adult_profile ? 'Com adultos' : 'Sem adultos'}</td><td className="p-4">{statusLabel[test.status]}</td><td className="p-4">{test.valid_until ? new Date(test.valid_until).toLocaleDateString('pt-BR') : '—'}</td></tr>)}{!tests.length && <tr><td colSpan="5" className="p-10 text-center text-gray-500"><TestTube2 className="mx-auto mb-3" />Nenhum teste registrado.</td></tr>}</tbody></table></div>
     </div>

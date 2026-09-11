@@ -5,6 +5,973 @@
 
 ## Última revisão
 
+- Data/hora: 2026-09-10 — correção do catálogo de apps e descoberta do catálogo de instalação do painel
+- **Erro corrigido**: `WWPANEL_APPS`/`WWPANEL_XSTREAM_APPS` em `server/wplayCatalog.js` tinham
+  uma lista **inventada** (`Wapp`, `WTV Player`, ...). A lista real (extraída do bundle oficial
+  do painel + spec) tem 15 apps, com a rota decidida pelo nome: **WTV Player/Wapp, XCloud e
+  Kplay** → `/lines/active/app/xstream`; os outros 12 (BrasilIPTV, EasyPlayer, IPTVPlus,
+  IPTVNextPlayer, IPTVPlayerio, IPTVProPlayer, IPTVStarPlayer, IPlayer, OttPlayer, TVVision,
+  TiviPlayerIPTV, IPTV4K) → `/lines/active/app`. Não inferir nomes: só valem esses.
+- **Ativação por MAC confirmada**: `POST /lines/active/app` exige `nameApp`, `mac`,
+  `namePlaylist` e `id_user` (número = id da linha). MAC sozinho não basta; como a linha é
+  nossa, o `id_user` já existe → o cliente só precisa mandar o MAC (ou o código do app).
+- **Descoberta importante**: o painel já mantém o catálogo de instalação em `GET /panel-links`
+  (15 itens) — código Downloader, códigos da Play Store (M7 Download / XS Control / Loja SSH e
+  ntDown), link direto, loja, e canal por plataforma (ex.: `Roku Store: busque Krator+`,
+  `LG Store: busque Krator+`, Android TV via TV Bro + loja). Os templates por produto já vêm
+  com `{{usuário}}`/`{{senha}}`. Portanto **não** precisamos escrever a orientação do zero:
+  o fluxo pode consumir isso do painel.
+- **Fluxo desenhado com o dono**: cliente informa a marca/aparelho → bot mostra os apps padrão
+  daquela TV → se o cliente achar, ele instala e manda o MAC (ou o código do app); se não achar,
+  o bot mostra o resto da lista, o cliente escolhe e manda o MAC → bot ativa no painel com
+  `{ nameApp, mac, namePlaylist: <nome do usuário>, id_user }`.
+- **Matriz de produtos confirmada na fonte** (`GET /products`, 8 itens): Essencial 2 IPTV + 1 P2P
+  (id 2), Premium 1 IPTV + 2 Nexus (id 5), Ultra 1 Krator+ (id 11, streamings **WHOT + KRATOR**),
+  Whot (id 10); adicionais Nexus (7), IPTV e P2P (8), Whot (9), Krator+ (12). Registrada em
+  `docs/wplay-produtos-e-instalacao.md`, junto da compatibilidade por produto e do fluxo guiado.
+  **Ponto de atenção**: o Ultra 1 Krator+ já carrega WHOT nos streamings — decidir se o adulto
+  fica à parte. **Nexus**: o catálogo só oferece canais Android (Downloader/Play Store), sem
+  Roku/LG/Samsung — indício forte de Android-only, confirmar.
+- **Orientação de instalação implementada** (somente leitura): `server/wplayInstall.js` lê o
+  catálogo `GET /panel-links` do painel (com cache de 10 min), normaliza marca/aparelho e resolve
+  o template certo por produto — nada de orientação escrita à mão, o painel segue mandando.
+  Nova rota `GET /wplay/install?product=&brand=&username=&password=` devolve o texto pronto
+  (com `{{usuário}}`/`{{senha}}` preenchidos quando informados) + lista de sugestões. Regra
+  embutida: **Nexus fora de Android devolve `found:false` (`nexus_android_only`)**.
+  `server/wplayInstall.test.js` cobre normalização, placeholders, Nexus e cache.
+- **Fluxo de teste→app aprovado pelo dono (2026-09-11)**: o bot cria o **teste** e já **ativa o
+  app no próprio teste** — ativar app em teste **não consome crédito**, então o cliente assiste
+  durante o trial. A linha de produção só é criada/ativada **depois do pagamento**.
+- **Vínculo cliente ↔ linha implementado**: migração `20260911120000_wplay_customer_lines.sql`
+  (não aplicada) adiciona a `customer_panel_targets` as colunas `external_line_id`,
+  `external_line_kind` (`test`/`production`) e `external_test_line_id`; e a
+  `customer_access_credentials` o `mac_address` e `app_activated_at`. É o `id_user` que amarra a
+  ativação do app — o MAC sozinho não identifica a linha.
+- **Rota `/wplay/tests` corrigida**: `testDuration` agora é **horas** (número; `'4h'` é aceito e
+  convertido), e a rota **roteia por produto** — `krator` → `POST /lines/krator/test` (exige
+  `package_krator` + `serviceId`), `nexus` → `POST /lines/nexus/test` (exige `package_nexus`),
+  `iptv`/`p2p` → `POST /lines/test`. Nova leitura `GET /wplay/services` entrega o `serviceId`.
+- **Fluxo do bot (n8n) alterado com autorização do dono (2026-09-11)**: o teste passou a ser
+  **WPlay** (substitui o CineHub), com entrega da instalação vinda do painel e ativação do app
+  pelo MAC. O bot fala com rotas novas da ponte: `GET /typebot/wplay/status`,
+  `POST /typebot/wplay/install` (leitura), `POST /typebot/wplay/trials` e
+  `POST /typebot/wplay/app` (escrita, atrás do gate). Implementado em `server/wplayBotFlow.js`
+  (com casamento do nome do app dito pelo cliente contra a lista real do painel e extração de MAC)
+  e ligado em `server/api.js`.
+- **Migração `20260911120000_wplay_customer_lines.sql` aplicada** no Supabase via Management API
+  e conferida por leitura: `customer_panel_targets.external_line_id`,
+  `external_line_kind`, `external_test_line_id` e `customer_access_credentials.mac_address`,
+  `app_activated_at` existem.
+- **Workflow do n8n atualizado** (36 → 44 nós, backup em `/root/n8n/.horizons-whatsapp-completo-backup-*.json`):
+  novos nós `Checar WPlay`, `WPlay pronto?`, `Criar teste WPlay`, `Buscar instalação WPlay`,
+  `Montar entrega WPlay`, `É ativar app?`, `Ativar app WPlay`, `Confirmar ativação WPlay`; o passo
+  `wplay_mac` foi adicionado ao `Decidir etapa` (aparelho → marca → pacote → teste → MAC).
+- **Importante — o fluxo novo está seguro, mas ainda não ativo**: `WPlay pronto?` só desvia para o
+  WPlay quando `GET /typebot/wplay/status` devolve `enabled:true`, o que depende de
+  `WWPANEL_WRITES_ENABLED=true`. Com o gate desligado o bot **segue no caminho antigo (CineHub)**,
+  verificado ponta a ponta (teste e ativação respondem `503 writes_disabled`, **sem consumir crédito**).
+  O menu de pacotes hoje só oferece **IPTV/P2P (4/8/24h)**; Krator+/Nexus/Ultra ainda não entram.
+- **`api` reconstruído e recriado** (`docker compose -f docker-compose.vps.yml build api` + `up -d api`):
+  o container rodava imagem antiga, anterior às rotas WPlay. Health 200 após 2s; rotas conferidas
+  (`401` sem token). O `frontend` **não** foi reconstruído (a página `/wplay` segue pendente).
+- Verificação: lint limpo, **87 testes** aprovados, `git diff --check` limpo. Nenhuma operação de
+  escrita no painel nesta rodada.
+- **Decidido pelo dono (2026-09-11)**: o fluxo guiado roda no **bot do cliente (WhatsApp)**, que
+  hoje está **no n8n** — não é mais Typebot. O Telegram do dono é assistente pessoal. Nexus
+  confirmado **Android-only**; **Whot não terá plano próprio** (só embutido no Ultra 1 Krator+).
+- **Pendente**: a rota `/wplay/tests` ainda usa `testDuration` como string (`'4h'`) quando o
+  painel espera número (horas), e falta `krator_package`/`serviceId` para teste Krator+; também
+  falta o vínculo cliente ↔ `id_user` da linha WPlay para a ativação por MAC.
+- Data/hora: 2026-09-10 — primeiro teste **real** no painel WPlay (Krator+) e esquema exato confirmado
+- **Feito com autorização explícita do dono** ("crie o teste no krator+"). Uma única
+  operação real foi executada; ela consome crédito.
+- **Teste Krator+ criado com sucesso** (`HTTP 201`, id `105393227`, username `pg89992`,
+  validade 1h, `krator_package "1"`, P2P e IPTV `1. Brasil`). As credenciais do teste
+  foram entregues apenas ao dono no chat e **não** foram gravadas aqui.
+- **Esquema real confirmado** (spec público em `https://mcapi.knewcms.com:2087/api-json`):
+  o teste comum é `POST /lines/test` e o Krator+ é `POST /lines/krator/test` (este último
+  **não** aparece no OpenAPI, mas é o que o painel usa). Campos do Krator+:
+  `krator_package:"1"`, `package_p2p`, `package_iptv`, `testDuration` (**horas**; padrão 1h
+  no Krator+, 4h no Wplay, 24h no Nexus), `serviceId` (obrigatório, vindo de
+  `GET /lines/wapp/services`) e `custom_package` opcional. **Não existe campo de nome**
+  para teste no painel.
+- **Correção aplicada (2026-09-11)**: a rota `/wplay/tests` agora envia `testDuration` em
+  **horas** e roteia Krator+ para `POST /lines/krator/test` com `krator_package` + `serviceId`
+  (lido de `GET /wplay/services`), e Nexus para `POST /lines/nexus/test`. Falta apenas
+  aplicar a migração de vínculo e ligar as escritas quando o dono autorizar.
+- **Limpeza concluída**: o teste Nexus não intencional (id `105393213`) foi excluído
+  com autorização do dono (`DELETE /lines/{id}` → `{"msg":"Line deletada"}`). O teste
+  Krator+ `105393227` permanece. Lição registrada: nesse painel, corpo vazio **não**
+  garante ausência de efeito colateral — nunca sondar endpoint de escrita sem
+  confirmar isso antes.
+- A operação foi feita pelo cliente verificado (`server/wplayPanel.js`) direto no painel;
+  a rota HTTP do Horizons continua atrás do gate `WWPANEL_WRITES_ENABLED=false` e o
+  container `api` **não** foi reiniciado.
+- Data/hora: 2026-09-11 — gate granular por operação WPlay implementado e publicado (Opção A)
+- **Entregue**: `WWPANEL_WRITES_ENABLED` segue como chave-mestra e cada operação ganhou
+  flag própria em `server/config.js` — `WWPANEL_TESTS_ENABLED`, `WWPANEL_CUSTOMERS_ENABLED`,
+  `WWPANEL_RENEWALS_ENABLED` e `WWPANEL_APP_ACTIVATION_ENABLED` (todas `false` por padrão).
+  `operationDisabled()` em `server/routes/wplay.js` responde 403 nomeando a operação, e
+  `GET /wplay/status` expõe `operations.{test,customer,renewal,app_activation}`.
+- **Testes**: 92/92 verdes, incluindo 5 novos que cobrem cada flag (bloqueio e liberação).
+- **Deploy**: container `api` reconstruído e recriado via `docker compose -f docker-compose.vps.yml`;
+  saúde 200, `/wplay/*` devolve 401 sem token, as quatro flags presentes no container. As
+  escritas seguem globalmente desligadas (`writes_disabled`), sem consumo de crédito.
+- **Correção de infra**: o `.env` estava corrompido com linhas `***` (caracteres inválidos
+  que quebravam o `docker compose`); removidas e substituídas pelas 4 flags corretas.
+  Backup em `.env.bak.<ts>`.
+- **Incidente de modelo**: a sessão do assistente estava fixada em `deepseek/deepseek-v4-flash`,
+  referência inexistente no provider `deepseek` (que só tem `deepseek-chat`/`deepseek-reasoner`)
+  — provável causa das respostas degradadas. Sessão re-apontada para `qwen/qwen3.7-plus`
+  (válido e na allowlist).
+- Data/hora: 2026-09-10 — integração WPlay (fluxos 1–3) pronta, sem operações reais
+- **Escopo autorizado**: fluxos de teste (trial) + app, cliente + renovação e app
+  licenciado, expostos em página nova, nas telas existentes e no bot/n8n. O
+  proprietário pediu explicitamente **nenhuma** operação real que consuma
+  crédito nesta rodada; tudo ficou atrás de gate desligado.
+- **Backend**: `server/routes/wplay.js` registra `/wplay/status`,
+  `/wplay/catalog`, `/wplay/tests`, `/wplay/apps/activate`,
+  `/wplay/apps/activate-xstream`, `/wplay/customers`, `/wplay/customers/:id/extend`,
+  `/wplay/customers/:id/add-48h`, `/wplay/customers/:id/plan` e
+  `/wplay/customers/:id/activate`. Todas autenticadas; as de escrita passam por
+  `WWPANEL_WRITES_ENABLED` (403 quando desligado) e chave ausente vira 503.
+  Cada tentativa é auditada: log estruturado sanitizado + inserção opcional em
+  `wplay_operations` (tolerante à ausência da tabela).
+- **Migration** `supabase/migrations/20260910120000_wplay_operations.sql` criada
+  e **não aplicada**; sem ela a auditoria cai no log estruturado.
+- **Frontend**: nova página `src/pages/WplayPanel.jsx` na rota `/wplay` (com
+  item no Sidebar e dry-run quando as escritas estão desligadas) e atalhos para
+  o painel em `/testes`, `/clientes` e `/renovacoes`.
+- **Bot/n8n**: comando `/wplay` somente leitura no bot administrativo e o
+  contrato `docs/n8n-wplay.md` (o n8n fala com o Horizons, nunca com o painel
+  direto, e nada foi criado/publicado no n8n).
+- **Configuração**: `WWPANEL_API_URL`, `WWPANEL_API_KEY` (no `.env` protegido) e
+  `WWPANEL_WRITES_ENABLED=false`, documentados no `.env.local.example`.
+- Verificação: lint sem erros, **58 testes** aprovados (eram 50), build e
+  `git diff --check` limpos. Nenhum cliente, teste, renovação, app ou crédito
+  foi criado no painel; nenhum serviço foi reiniciado.
+- Pendente do operador: (1) aplicar a migration de auditoria no Supabase;
+  (2) recriar `api` e `frontend` para publicar rota e tela; (3) ligar
+  `WWPANEL_WRITES_ENABLED=true` só quando for executar operações reais. Como a
+  chave foi enviada no chat, recomenda-se rotacioná-la após a homologação.
+- Data/hora: 2026-09-10 — base da integração WPlay (wwpanel) preparada sem operações reais
+- O proprietário apresentou o painel **WPlay** (`wwpanel.link`), novo e fora da
+  lista atual, que expõe API HTTP própria (docs em `https://docs.wplay.com.br`)
+  na base `https://mcapi.knewcms.com:2087`, com autenticação por API key no
+  header de autorização. A chave fornecida foi validada por chamadas sem efeito
+  colateral: payload vazio → `400` de validação, id inexistente → `404`, token
+  inválido → `401`.
+- Criada a base da integração, sem publicar nem executar nada no painel:
+  `server/wplayCatalog.js` com os IDs oficiais (planos, add-ons, pacotes
+  IPTV/P2P, Krator/Nexus, apps, países) e `server/wplayPanel.js` com o cliente
+  HTTP (timeout, retry limitado para `429`/`5xx` respeitando `Retry-After`,
+  erro com `statusCode` e métodos de teste/cliente/renovação/app/revendedor).
+  `server/wplayPanel.test.js` cobre 7 casos com fetch simulado.
+- Configuração: `WWPANEL_API_URL` e `WWPANEL_API_KEY` foram adicionadas ao
+  `server/config.js`, ao `.env.local.example` (sem valor) e ao `.env` protegido
+  (`0600`). A chave não entrou em código, Git, logs nem nesta memória.
+- Verificação: lint sem erros, **50 testes** aprovados (eram 43),
+  `git diff --check` limpo. Nenhum cliente, teste, renovação, app ou crédito foi
+  criado no painel; nenhum serviço foi reiniciado.
+- Pendência registrada no catálogo: o pacote P2P `5. Brasil + Portugal` veio na
+  documentação com 23 caracteres (ObjectIds têm 24); confirmar com o painel
+  antes de usar essa variante.
+- Próximo passo: definir o escopo de exposição dos fluxos (teste, cliente,
+  renovação, app, revendedor) e, quando autorizado, recriar o container `api`
+  para carregar a variável nova. Toda escrita real no painel consome créditos e
+  exige confirmação explícita do operador.
+- Data/hora: 2026-09-04 — contrato do catálogo corrigido e coberto
+- As rotas de catálogo e lista de renovação foram normalizadas para o contrato
+  usado por `horizonsApi`: o navegador chama `/api/operations/...` e a API
+  registra `/operations/...`. Foram removidos os prefixos duplicados nos
+  consumidores de `/procedimentos`, `/novo-acesso`, Gerenciar acesso e `/baixa`.
+- Os POSTs de delivery profiles e tutorial slots foram consolidados em
+  `server/routes/catalog.js` e removidos de `server/routes/operations.js`. O
+  cadastro agora usa validação Zod e grava `changed_by`; as rotas do catálogo
+  ficaram reunidas no mesmo módulo.
+- A leitura de delivery profiles agora devolve também os servidores CineHub
+  ativos. O formulário de `/procedimentos` usa essa lista real e exige a seleção
+  de servidor, em vez de oferecer somente `legacy`.
+- Criado `server/catalog.test.js`, cobrindo o registro de GET/POST/PUT/DELETE e
+  clone sem `/api` duplicado, a validação do cadastro, auditoria de criação e
+  edição e remoção restritas ao proprietário. Lint, 13 suítes/43 testes,
+  build e `git diff --check` passaram.
+- Nenhum deploy, reinício, mensagem, cobrança, cliente ou painel externo foi
+  alterado. Próximo passo: reconstruir API/frontend e fazer smoke autenticado
+  de `/procedimentos`, `/novo-acesso` e `/baixa`; depois separar commits por
+  domínio antes das demais homologações.
+- Data/hora: 2026-09-04 — retomada e reconfirmação dos bloqueadores
+- Retomada feita sem mensagens, cobranças, alterações de clientes, deploy ou
+  operações em painéis externos. `frontend`, `api`, `worker` e `redis` estão
+  ativos; Redis está saudável, a API respondeu `status=ok` e o frontend HTTP
+  `200`. Nenhum serviço foi reiniciado.
+- Lint, as 12 suítes/40 testes do backend, build e `git diff --check` passaram.
+  O bundle principal continua grande (~1,36 MB; ~395 KB gzip).
+- Confirmado o bloqueador de prefixo: `horizonsApi` já prefixa toda rota com
+  `/api`, mas as leituras/edições/remoções, clone e refresh do catálogo em
+  `ProcedimentosPaineis`, `NovoAcessoWizard` e
+  `CustomerServerAccessModal` passam novamente `/api/operations/...`, gerando
+  `/api/api/operations/...`. Os POSTs de criação usam `/operations/...` e por
+  isso seguem outro contrato.
+- Confirmado o bloqueador do formulário em `/procedimentos`: o seletor de
+  servidor para cadastrar app oferece somente `legacy`, sem carregar os
+  servidores CineHub. Também há um contêiner visual duplicado na seção de
+  clone, embora o JSX compile.
+- A suposta duplicidade ativa de POSTs do catálogo não se confirmou: os POSTs
+  antigos em `server/api.js` permanecem ativos, enquanto o trecho adjacente que
+  foi movido está dentro de comentário; `server/routes/catalog.js` ainda não
+  implementa POST de delivery profile/tutorial. A correção deve primeiro
+  uniformizar o contrato e adicionar testes, sem remover rotas no escuro.
+- Próximo passo recomendado: corrigir os prefixos em todos os consumidores,
+  carregar a lista real de servidores no formulário, remover o contêiner
+  duplicado e cobrir GET/POST/PUT/DELETE/clone com testes focados. Depois fazer
+  smoke autenticado de `/procedimentos`, `/novo-acesso`, Dashboard e financeiro;
+  somente então separar o worktree grande em commits por domínio.
+- Data/hora: 2026-09-02 16:08 BRT — diagnóstico consolidado das pendências atuais
+- O estado técnico foi revisado sem executar mensagens, cobranças, alterações de
+  clientes ou operações em painéis externos. API (`status=ok`), frontend (HTTP
+  200), n8n e smoke operacional passaram; lint, 40 testes, build e
+  `git diff --check` também passaram.
+- **Bloqueadores identificados antes de consolidar/publicar**: chamadas novas de
+  catálogo no frontend usam `/api/operations/...` embora `horizonsApi` já
+  acrescente `/api`, gerando provável `/api/api/...`; há POSTs duplicados de
+  delivery profiles/tutorial slots em `server/api.js` e no módulo extraído; e o
+  formulário de app em `/procedimentos` aparentemente só permite o servidor
+  `legacy`. Corrigir e cobrir esses contratos primeiro.
+- O worktree continua propositalmente grande e não consolidado: dezenas de
+  arquivos alterados/novos misturam navegação, dependências, modularização,
+  migrations, financeiro, catálogo, Telegram e worker. Não fazer um commit ou
+  publicação monolítica; separar em blocos revisáveis após corrigir os
+  bloqueadores e executar validações focadas.
+- A auditoria de produção atual encontrou **1 vulnerabilidade moderada** na
+  dependência transitiva `qs`, com correção indicada pelo npm; nenhuma correção
+  automática foi aplicada. O bundle principal está grande (~1,36 MB; ~395 KB
+  gzip) e merece code splitting depois dos bloqueadores funcionais.
+- **Ordem recomendada imediata**: (1) corrigir prefixos, duplicidade de handlers
+  e seletor de servidor; (2) adicionar testes do catálogo/cliente HTTP e dos
+  jobs; (3) validar migrations/RLS em ambiente descartável e fazer smoke
+  autenticado do wizard, Dashboard e páginas financeiras; (4) organizar commits
+  por domínio; (5) só depois tratar `qs`, bundle e homologações externas.
+- Pendências manuais atuais: validar Dashboard/gráfico, `/saude`, `/novo-acesso`,
+  catálogo e paginação; testar comandos Telegram informativos e o fluxo de
+  confirmação dos comandos de escrita; recalcular e revisar pendências
+  cadastrais; homologar o fluxo financeiro com comprovante controlado. Qualquer
+  envio real, ativação de flag, teste Elite/P2P ou operação em painel segue
+  exigindo confirmação explícita do proprietário.
+- Data/hora: 2026-08-25 — tendências no Dashboard, mais comandos Telegram, auditoria e paginação
+- **Tendências no Dashboard**: novo painel "Pagamentos confirmados
+  (30 dias)" com `LineChart` do recharts consumindo
+  `GET /api/billing/trends?days=30`. Mostra total recebido no período e
+  a série diária de pagamentos.
+- **Novos comandos Telegram**: `/semcheckout` (clientes ativos sem
+  checkout) e `/hoje` (resumo do dia — lembretes, baixa, renovações e
+  recuperação).
+- **Auditoria `changed_by`**: migration
+  `20260825140000_audit_change_columns.sql` aplicada em
+  `server_delivery_profiles` e `tutorial_media_slots`. A API passa a
+  gravar quem alterou em cada inserção/edição.
+- **Paginação**: `/recovery/queue` e `/payments/overview` agora aceitam
+  `?limit` e `?offset` e retornam `count`, `limit`, `offset`, `has_more`.
+  `/billing/reminders/sendable` também paginado.
+- Lint, 40 testes, build, diff-check, API `status=ok`, frontend 200 e
+  smoke operacional passaram. Nenhuma mensagem, cobrança, cliente ou
+  painel externo foi alterado.
+- Próximo passo: testar `/hoje`, `/semcheckout` e abrir o Dashboard
+  para ver o gráfico.
+- Data/hora: 2026-08-25 — bot assistente (escrita + info), alerta Telegram, tendências e stale jobs
+- **Comandos de escrita no Telegram**: novos atalhos `/aprovar <id>`
+  e `/rejeitar <id>` para decidir lembretes de cobrança, e
+  `/recuperar <id>` para marcar um cliente como recuperado. Todos
+  passam pelo fluxo padrão de confirmação do bot (botões ✅/❌ com
+  expiração de 10 minutos).
+- **Comandos de informação**: novos atalhos `/semacesso`
+  (clientes ativos sem acesso principal) e `/semcredenciais`
+  (acessos com usuário/senha faltando).
+- **Alerta financeiro no Telegram**: ao entrar em
+  `awaiting_bank_review`, o sistema envia um resumo do comprovante
+  para o Telegram do administrador, gated por
+  `HORIZONS_TELEGRAM_FINANCIAL_ALERTS_ENABLED`.
+- **Tendências financeiras**: novo endpoint
+  `GET /api/billing/trends?days=30` retornando a série diária de
+  pagamentos confirmados (`payment_events`) para gráficos e análises.
+- **Worker de catálogo vencido**: job BullMQ recorrente
+  `stale-delivery-profiles` (cron padrão semanal, segunda 03:00)
+  desativa `server_delivery_profiles` com `valid_until` no passado.
+  Gate: `HORIZONS_STALE_CATALOG_CHECK_ENABLED`.
+- Lint, 40 testes, build, diff-check, API `status=ok`, frontend 200 e
+  smoke operacional passaram. Nenhuma mensagem, cobrança, cliente ou
+  painel externo foi alterado.
+- Próximo passo: você testar `/semacesso`, `/semcredenciais`, `/aprovar`,
+  `/rejeitar`, `/recuperar` no Telegram e ver o retorno.
+- Data/hora: 2026-08-25 — bot assistente, wizard, clone, refresh e auditoria
+- **Bot assistente Telegram (comandos financeiros)**: novo módulo
+  `server/telegramCommands.js` com atalhos `/baixa`,
+  `/recuperacao`, `/renovacoes`, `/digest` e `/lembretes`.
+  O handler Telegram do bot administrativo identifica comandos diretos
+  e responde sem passar pelo MiniMax. Cada execução é auditada em
+  `admin_assistant_audit`.
+- **Wizard de novo acesso** (`/novo-acesso`): nova página
+  `src/pages/NovoAcessoWizard.jsx` com passos Cliente → Servidor →
+  Plano → Apps → Concluir. Cria a migração, gera os apps do catálogo
+  automaticamente e mostra o resumo.
+- **Clone de catálogo entre servidores**: novo endpoint
+  `POST /api/operations/delivery-profiles/clone` que copia os apps de
+  um servidor para outro (idempotente). Botão “Clonar” em
+  `/procedimentos`.
+- **Atualização do catálogo Elite IPTV**: novo módulo
+  `server/refreshEliteCatalog.js` e endpoint
+  `POST /api/operations/delivery-profiles/refresh-elite`. Cada clique
+  cria um teste no painel Elite e atualiza códigos/URLs/instruções
+  dos delivery_profiles já existentes. Botão “Atualizar catálogo Elite”
+  em `/procedimentos`.
+- **Auditoria de credenciais**: nova migration
+  `20260825130000_customer_access_credentials_audit.sql` adiciona
+  `changed_by`. A API grava quem alterou e a UI mostra “Atualizado em”
+  em cada app do Gerenciar acesso.
+- Lint, 40 testes, build, diff-check, API `status=ok`, frontend 200 e
+  smoke operacional passaram. Nenhuma mensagem, cobrança, cliente ou
+  painel externo foi alterado.
+- Próximo passo: você pode testar `/novo-acesso` com um cliente real;
+  o botão “Atualizar catálogo Elite” deve ser usado uma vez por mês
+  para manter os códigos em dia.
+- Data/hora: 2026-08-25 — catálogo Elite IPTV pré-cadastrado e geração automática
+- **Catálogo Elite IPTV**: dois scripts idempotentes cadastraram 18 apps
+  (`server_delivery_profiles`) e 3 procedimentos padrão
+  (`tutorial_media_slots`) para o servidor Elite IPTV a partir da
+  devolutiva do painel. WEBPLAYER, Ultramix, Lótus, XCIPTV, Elite TV e os
+  5 apps parceiros (Vizzion Play, Blessed Player, Epic Play, Play Sim,
+  Assist+) já estão prontos no `/procedimentos` para uso pelo operador.
+- **Geração automática de credenciais**: novo endpoint
+  `POST /customers/:id/server-accesses/credentials/from-catalog/:targetId`
+  copia os apps do catálogo para um acesso de cliente, idempotente. O
+  modal **Gerenciar acesso** chama esse endpoint automaticamente após
+  cada migração, criando os apps pré-preenchidos; o operador só digita
+  usuário e senha de cada um.
+- Lint, 40 testes, build, diff-check, API `status=ok`, frontend 200 e
+  smoke operacional passaram. Nenhuma mensagem, cobrança, cliente ou
+  painel externo foi alterado.
+- Próximo passo: ao migrar ou vincular um cliente para Elite IPTV pelo
+  Gerenciar acesso, os apps já aparecerão pré-preenchidos.
+- Data/hora: 2026-08-25 — catálogo de apps e procedimentos por servidor
+- **Catálogo reutilizável**: nova migration
+  `20260825110000_link_tutorials_to_delivery_profiles.sql` adiciona
+  `display_order` em `server_delivery_profiles` e vincula
+  `tutorial_media_slots` ao app correspondente via
+  `server_delivery_profile_id`.
+- **API do catálogo**: novo módulo `server/routes/catalog.js` com
+  `GET /api/operations/delivery-profiles` (filtros por servidor/categoria),
+  `PUT/DELETE` dos delivery profiles e dos tutorial slots.
+- **Página /procedimentos reescrita**: agora CRUD dinâmico. Lista os
+  apps cadastrados por servidor e os procedimentos de instalação por
+  categoria de aparelho, com formulários de cadastro/edição/remoção. Os
+  procedimentos podem ser vinculados a um app específico do catálogo.
+- **Gerenciar acesso**: o modal de cadastro de app passou a oferecer um
+  campo “Selecionar app do catálogo” que preenche automaticamente nome,
+  URL, código e notas a partir de `server_delivery_profiles` filtrado
+  pelo servidor e categoria do cliente. O operador digita apenas
+  usuário e senha do cliente.
+- Lint, 40 testes, build, diff-check, API `status=ok`, frontend 200 e
+  smoke operacional passaram. Nenhuma mensagem, cobrança, cliente ou
+  painel externo foi alterado.
+- Próximo passo: você cadastrar os apps do servidor Elite no
+  /procedimentos e depois usar o catálogo para preencher os acessos dos
+  clientes rapidamente.
+- Data/hora: 2026-08-25 — credenciais por app e lista via WhatsApp
+- **Credenciais por app**: nova migration
+  `20260825100000_customer_access_credentials.sql` cria a tabela
+  `customer_access_credentials` (sem DNS) com categoria, app, URL de
+  instalação, código, usuário, senha cifrada e notas. Endpoints novos:
+  `POST/GET/PUT/DELETE /api/customers/:id/server-accesses/credentials`.
+  O modal **Gerenciar acesso** lista os apps do acesso principal e permite
+  cadastrar, editar e remover por categoria (Smart TV, Android/Google TV,
+  Fire TV, TV Box, Celular, iPhone/iPad, Computador, Console, Outro).
+- **Lista de renovação bonitinha**: `GET /api/operations/renewal-list` agora
+  devolve os apps decriptados de cada cliente; `POST .../renewal-list/send`
+  envia a lista por WhatsApp a partir do número financeiro
+  (`EVOLUTION_FINANCE_INSTANCE`) para `HORIZONS_WHATSAPP_RENEWAL_NUMBER`.
+- **Job agendado `whatsapp-renewal-list`** (gated por
+  `HORIZONS_WHATSAPP_RENEWAL_ENABLED`, desligado por padrão). O envio pelo
+  Telegram dessa lista foi removido; o digest diário segue pelo Telegram.
+- Lint, 40 testes, build, diff-check, API `status=ok`, frontend 200 e
+  smoke operacional passaram. Nenhuma mensagem, cobrança, cliente ou painel
+  externo foi alterado.
+- Pendente: você me enviar o número de WhatsApp que receberá a lista de
+  renovação e ligar `HORIZONS_WHATSAPP_RENEWAL_ENABLED=true`.
+- Data/hora: 2026-08-25 — lista de renovação e validação cruzada com Telegram
+- **Validação cruzada**: `loadReceiptContext` agora devolve um objeto
+  `validation` explícito (valor/data/cliente/E2E/confiança) exibido na
+  `/baixa` para apoiar a decisão humana de baixa.
+- **Lista de renovação no painel**: novos endpoints
+  `GET /api/operations/renewal-list` e
+  `POST /api/operations/renewal-list/send`. Retornam clientes com baixa
+  confirmada e credenciais decriptadas (usuário, senha, DNS, checkout,
+  telas, validade, plano). A página `/baixa` ganhou um painel
+  “Renovação no painel” com botões para copiar credenciais e enviar a
+  lista bonitinha ao Telegram administrativo.
+- **Job agendado de Telegram** para a lista de renovação (gatilhos
+  `HORIZONS_TELEGRAM_RENEWAL_LIST_ENABLED` e
+  `HORIZONS_TELEGRAM_RENEWAL_LIST_CRON`, desligado por padrão). Nenhum
+  envio ocorre sem você ligar a flag.
+- O cadastro de usuário e senha por servidor já existe em
+  `customer_panel_targets`; o operador pode editar em Clientes →
+  Gerenciar acesso, e a lista de renovação lê diretamente esses campos
+  decriptados para que ele entre no painel e renove.
+- Lint, 40 testes, build, diff-check, API `status=ok` e frontend 200
+  passaram. Nenhuma mensagem, cobrança, cliente ou painel externo foi
+  alterado.
+- Próximo passo: validar ponta a ponta quando você tiver um comprovante
+  real chegando no número financeiro/vendas.
+- Data/hora: 2026-08-25 — baixa de pagamentos, validação cruzada e digest
+- **Baixa de Pagamentos**: nova página `/baixa` (`src/pages/BaixaPagamentos.jsx`)
+  consumindo `/api/payments/overview`. Mostra cada renovação com
+  `awaiting_bank_review`, contexto completo do cliente (servidor, telas,
+  checkout, credenciais, recuperação) e botões para confirmar, rejeitar
+  ou solicitar novo comprovante.
+- **Validação cruzada**: novo `GET /api/renewals/:renewalId/receipts/:receiptId`
+  retorna o recibo com renovação, cliente, acesso principal e status de
+  recuperação. O `POST /renewals/:renewalId/receipts/:receiptId/review` foi
+  alinhado para também devolver contexto quando o operador decide a baixa.
+- **Digest diário Telegram** (preparado, desligado): novo módulo
+  `server/telegramDigest.js` com composição do digest e `sendTelegramMessage`;
+  o worker registra um job BullMQ recorrente quando
+  `HORIZONS_TELEGRAM_DAILY_DIGEST_ENABLED=true` (cron
+  `HORIZONS_TELEGRAM_DAILY_DIGEST_CRON`, padrão `0 8 * * *`). Nenhum envio
+  ocorre até o operador ligar a flag.
+- Validação completa: sintaxe, lint, 40 testes, build, diff-check, API
+  `status=ok`, frontend 200 e smoke operacional. Nenhuma mensagem,
+  cobrança, cliente ou painel externo foi alterado. O `.env.local.example`
+  documenta as duas variáveis novas.
+- Pendente do operador: (1) configurar instâncias Evolution financeiro/vendas,
+  (2) habilitar `HORIZONS_TELEGRAM_DAILY_DIGEST_ENABLED` quando quiser o
+  digest, (3) homologar o bot Elite no QA, (4) revisar a fila de baixa e
+  aprovar manualmente os comprovantes Pix.
+- Data/hora: 2026-08-25 — fronts 1 a 5 concluídos (smoke, auditoria de
+  recuperação, workflow de cobrança ativo, bot para Elite, router 7)
+- **Front 1**: criado `tools/smoke.mjs` validando frontend, API, n8n e
+  checklist (5 checks). Resultado atual: ok.
+- **Front 2**: migration `20260825090000_customer_recovery_audit.sql`
+  aplicada; criados endpoints `/recovery/:id/notes`, `/recovery/:id/history`
+  e o histórico aparece na Central Operacional. 40 testes aprovados.
+- **Front 3**: `react-router-dom` atualizado para major 7
+  (`^7.18.0`). Auditoria de produção: 0 vulnerabilidades. Build, lint e
+  testes passaram; frontend republicado e smoke revalidou todas as rotas.
+- **Front 4**: workflow de cobrança `tRtpDjTu1GNkL8Za` (`Horizons | Envio de
+  lembretes financeiros | v1`) foi ativado. Cron a cada 30 min consulta
+  `/api/billing/reminders/sendable`. Atualmente 0 itens aprovados — nenhum
+  envio ocorre.
+- **Front 5**: bot (`Horizons | Atendimento WhatsApp completo | v1`,
+  id `9kEnUBMXxMvywDWn`) republicado com servidor Elite como padrão:
+  nova etapa `server_select` (Elite 4h/8h/12h e KYROS 6h/12h),
+  `server`/`duration_hours` lidos do estado da sessão, idempotency_key
+  específico por servidor.
+- Validações: lint, 40 testes, build, diff-check, API `status=ok`,
+  frontend 200 e smoke operacional. Nenhuma mensagem, cobrança, cliente
+  ou painel externo foi alterado.
+- Data/hora: 2026-08-25 — contrato n8n preparado e mark-sent publicado
+- A API passou a expor `POST /billing/reminders/:id/sent` (marca status=sent,
+  sent_at e updated_at; não envia nada). Foi criado o script local
+  `tools/create-horizons-billing-workflow.mjs` que gera
+  `Horizons | Envio de lembretes financeiros | v1` no n8n; ele foi preparado
+  e validado localmente em modo não publicado (gate por `PUBLISH=true`).
+- A análise do fluxo atual do bot (`create-horizons-full-workflow.mjs`)
+  confirmou o uso fixo de `server:'kyros'` na criação de teste. Foi escrito
+  o documento `docs/n8n-ajustes-elite.md` com as edições exatas para tornar
+  o Elite o servidor padrão e aceitar seleção de duração (4h/8h/12h), sem
+  publicar nada.
+- Documentação de contrato atualizada em `docs/operacao-financeira.md`
+  incluindo o novo endpoint `POST /billing/reminders/:id/sent`. Testes
+  cresceram para **40**. API publicada; lint, testes, build, diff-check, API
+  `status=ok` e frontend 200 passaram. Nenhuma mensagem, cobrança, cliente ou
+  painel externo foi alterado.
+- Pendente do operador: vincular instâncias Evolution financeiro/vendas e
+  autorizar publicação do workflow de cobrança com `PUBLISH=true`.
+- Data/hora: 2026-08-25 — auditoria de webhooks aplicada e Dashboard financeiro
+- A migration `20260825060000_webhook_audit.sql` foi aplicada no Supabase; a
+  tela `/logs` passa a consultar a tabela real. O Dashboard ganhou o painel
+  **Resumo Financeiro**: clientes com checkout, Pix por comprovante, manual,
+  em recuperação, credenciais incompletas e mensalidade esperada.
+- A fila de recuperação ganhou **notas internas** (`POST /recovery/:id/notes` e
+  campo na Central Operacional), e foi preparado o contrato de envio do n8n:
+  `GET /billing/reminders/sendable` lista lembretes aprovados com texto, método
+  e checkout, sem disparar nada. Documentação atualizada em
+  `docs/operacao-financeira.md`.
+- Testes cresceram para 39 (notas e decisões de recuperação). API e frontend
+  publicados; lint, testes, build, diff-check, API `status=ok` e frontend 200
+  passaram. Nenhuma mensagem, cobrança, cliente ou painel externo foi alterado.
+  Pendente do operador: vincular instâncias Evolution financeiro/vendas para o
+  vínculo de comprovante.
+- Data/hora: 2026-08-25 — revisão financeira por cliente publicada
+- Foi criada a tela **Revisão financeira** (`/revisao`) com
+  `src/pages/RevisaoFinanceira.jsx`, consumindo `/billing/overview`: mostra
+  todos os clientes com método de cobrança, servidor, telas, credenciais,
+  status e recuperação, com busca, filtros (recuperação, checkout, Pix,
+  credenciais incompletas) e totalizadores. A rota foi adicionada ao menu e ao
+  shell de navegação.
+- Foi criado `docs/operacao-financeira.md` documentando o fluxo completo:
+  método por cliente, fila de lembretes, reconhecimento de pagamento,
+  recuperação após 14 dias, comprovante pelas instâncias financeiro/vendas e
+  homologações pendentes antes de qualquer envio.
+- Frontend publicado; lint, 38 testes, build, diff-check, API `status=ok` e
+  frontend 200 passaram. Nenhuma mensagem, cobrança, cliente ou painel externo
+  foi alterado. Próximo passo do operador: revisar os 8 clientes em recuperação
+  e o lembrete planejado pela nova tela, e configurar as instâncias Evolution
+  de financeiro/vendas para validar o vínculo de comprovante.
+- Data/hora: 2026-08-25 — migration de cobrança aplicada e regra de recuperação definida
+- Com autorização do proprietário, a migration `20260825080000_customer_billing_recovery.sql`
+  foi aplicada no Supabase hospedado. A RPC `refresh_customer_billing` foi
+  executada uma vez para planejamento: criou 1 lembrete planejado para hoje e
+  identificou 8 clientes em recuperação (pagamento não reconhecido há mais de
+  duas semanas). Nenhuma mensagem, cobrança, cliente ou painel externo foi
+  alterado.
+- A regra de recuperação foi ajustada para **após 14 dias** do vencimento sem
+  pagamento reconhecido (antes eram 3 dias). O fluxo continua: com checkout →
+  lembrete com link; sem checkout → Pix por comprovante; pagamento reconhecido →
+  cancelar lembretes e marcar recuperado; não reconhecido após 14 dias → fila de
+  recuperação e lembretes cancelados (sem segunda cobrança automática).
+- Próximo passo: revisar a Central Operacional com os 8 clientes em recuperação
+  e o lembrete planejado, validar o vínculo de comprovante pelas instâncias
+  financeiro/vendas e depois definir o envio real com destino/template
+  homologados.
+- Data/hora: 2026-08-25 — base financeira de cobrança/recuperação preparada
+- Foi criada a migration `20260825080000_customer_billing_recovery.sql`
+  (ainda não aplicada ao banco), que estende `billing_reminder_queue` com
+  `payment_method` (checkout/pix/manual), `checkout_url`, `recovery` e
+  `attempt_count`; cria `customer_recovery_queue`; e adiciona a RPC
+  `refresh_customer_billing`, que planeja lembrete com link de checkout quando
+  existe, Pix por comprovante quando não, e move para recuperação clientes com
+  pagamento não reconhecido após o vencimento, cancelando lembretes planejados
+  para não enviar duas vezes. A RPC nunca envia mensagem, cria cobrança ou toca
+  painel externo.
+- API: `server/routes/billing.js` com `/billing/overview`, `/recovery/queue` e
+  `/recovery/:id/decision`; webhook Evolution passou a aceitar comprovantes
+  também pela instância de vendas (além da financeira). Frontend: Central
+  Operacional ganhou seção **Recuperação de clientes** e badge do método de
+  cobrança nos lembretes.
+- Lint, 38 testes, build, diff-check, API `status=ok` e frontend 200 passaram;
+  API e frontend foram publicados. Nenhuma mensagem, cobrança, cliente ou
+  painel foi alterado. Pendente: aplicar a migration `20260825080000...` no
+  Supabase após confirmação e definir regra de quantos dias de atraso entram em
+  recuperação (padrão atual: após 3 dias do vencimento sem pagamento
+  reconhecido).
+- Data/hora: 2026-08-25 — Elite IPTV e CineHub cadastrados como servidores
+- O banco é o projeto Supabase hospedado (ref `acmpfccutihuppfraita`); foi
+  aplicada via Management API a migration
+  `20260825070000_add_elite_and_cinehub_servers.sql`, que ampliou o CHECK de
+  `cinehub_servers.code` para incluir `cinehub` e `elite` e inseriu/atualizou as
+  linhas **CineHub** (provider cinehub) e **Elite IPTV** (provider elite) para
+  todos os usuários do projeto. Leitura confirmou as duas linhas ativas, além
+  do catálogo existente KYROS/VORNAK/KRONOS/ZEUS/FENIX/P2P.
+- O catálogo protegido de endpoints ganhou as chaves canônicas
+  `elite:4/8/12` com/sem adulto (mantendo os aliases `elite_iptv:*`). A tela
+  **Servidores** agora exibe o **Catálogo operacional (testes e acessos)** com
+  código, provider e status, além da lista legada. Frontend foi reconstruído e
+  recriado; lint, 36 testes, build, diff-check, API `status=ok` e frontend 200
+  passaram. Nenhum cliente, acesso, cobrança ou mensagem foi alterado.
+- Pendente: aplicar a migration `20260825060000_webhook_audit.sql` (auditoria de
+  webhooks) e, no fluxo n8n, passar `server=elite` para testes do Elite IPTV.
+- Data/hora: 2026-08-25 — simulador financeiro e publicação concluídas
+- A frente 10 do roadmap foi implementada: `server/financialSimulator.js` e
+  `server/routes/simulator.js` fornecem payloads sintéticos de callback PaggPay,
+  callback Efí, comprovante Pix e renovação, além de `POST /simulator/validate-receipt`
+  que executa somente a validação local sem banco, mensagem ou painel externo.
+  Foi adicionada cobertura em `server/financialSimulator.test.js` (36 testes no
+  total) e a auditoria de webhook ficou resiliente quando a migration ainda não
+  foi aplicada (retorna lista vazia com aviso).
+- A auditoria de pagamentos passou a registrar evento, status e duração no
+  `webhook_audit` quando disponível. API, frontend e worker foram
+  reconstruídos/recriados; pós-publicação API respondeu `status=ok`, frontend
+  HTTP 200 e os quatro serviços estão ativos. Lint, 36 testes, build e
+  diff-check passaram. Nenhuma operação externa de negócio foi executada.
+- Pendente: aplicar `20260825060000_webhook_audit.sql` no Supabase e, quando o
+  proprietário autorizar, atualizar o router (major) para zerar as duas
+  vulnerabilidades moderadas restantes.
+- Data/hora: 2026-08-25 — auditoria, logs, assistente e modularização avançadas
+- Foram implementadas as frentes 2–9 do roadmap: auditoria de webhooks com
+  rate limit (migration `20260825060000_webhook_audit.sql`, módulo
+  `server/routes/audit.js` e proteção em Evolution/PaggPay/Efí); tela
+  `LogsAuditoria.jsx` em `/logs`; área de teste do assistente em
+  `AssistenteAdmin.jsx` com modelo/fallback/allowlist e comandos seguros;
+  worker com `attempt` e evento estruturado de falha; docs
+  `docs/guia-operacional.md`; e extração de acessos/migrações de servidor para
+  `server/routes/customerServer.js`.
+- Vulnerabilidades de produção caíram para 2 moderadas (react-router /
+  react-router-dom); a correção automática exige major do router e ficou
+  registrada para rodada própria com testes visuais. Lint, 33 testes, build,
+  diff-check, API `status=ok` e frontend 200 passaram. Nenhuma operação externa
+  foi executada; a migration de auditoria ainda não foi aplicada ao banco.
+- Pendente: aplicar a migration de webhook_audit no Supabase quando o MCP de
+  banco estiver disponível e publicar frontend/API para disponibilizar `/logs`.
+- Data/hora: 2026-08-25 — destino de suporte alinhado ao n8n ativo
+- O operador confirmou que o fluxo de clientes atual é n8n, não Typebot. A configuração foi ajustada para usar `N8N_SUPPORT_PHONE` como variável principal; `TYPEBOT_SUPPORT_PHONE` permanece apenas como alias de compatibilidade para pontes antigas. O número de suporte foi copiado para a variável protegida do n8n, sem aparecer em status, Git ou logs.
+- O `.env.local.example` foi atualizado com `N8N_SALES_PHONE` e `N8N_SUPPORT_PHONE`. A API foi reconstruída/recriada, lint, 33 testes, build e diff-check passaram e `/health` respondeu `status=ok`. Nenhuma mensagem foi enviada; a instância Evolution de suporte e a captura continuam desligadas.
+- Data/hora: 2026-08-25 — número de suporte configurado no ambiente protegido
+- O número informado pelo proprietário foi normalizado e configurado somente em
+  `TYPEBOT_SUPPORT_PHONE` no `.env` protegido, sem copiar o valor para Git,
+  status, logs ou documentação. A API foi reconstruída/recriada e respondeu
+  `status=ok`.
+- A instância Evolution de suporte ainda não foi identificada/configurada e a
+  captura de conversas permanece desligada. Nenhuma mensagem foi enviada e o
+  próximo passo é confirmar o nome exato da instância de suporte antes de
+  ativar qualquer captura ou fluxo proativo.
+- Data/hora: 2026-08-25 — prioridade operacional definida para Elite/P2P
+- O proprietário definiu que os endpoints Elite IPTV e P2P cadastrados devem
+  ficar prioritários no catálogo e nas próximas jornadas, sem exigir
+  homologação individual de todos os links. O primeiro endpoint Elite 4h com
+  adulto continua como referência homologada; as demais variantes ficam
+  cadastradas como `pending_homologation`, prontas para uso somente quando uma
+  chamada real autorizada ocorrer. Não serão solicitados telefones adicionais
+  nem feitas chamadas automáticas.
+- Prioridade registrada: Elite IPTV para testes padrão 4h/8h/12h, com e sem
+  adulto, seguido do perfil P2P 8h. O roteamento deve preservar a seleção
+  explícita de servidor/variante e nunca reutilizar endpoint de outra variante.
+  Nenhum cliente, acesso, cobrança, mensagem ou painel externo foi alterado.
+- Data/hora: 2026-08-25 — endpoint P2P Elite IPTV cadastrado
+- O endpoint informado como **P2P — Teste P2P 8H** foi cadastrado no catálogo
+  protegido como `p2p:8:p2p`, usando o host Elite já permitido. Ele permanece
+  pendente de homologação real e não foi chamado nesta inclusão.
+- Lint, 33 testes e `git diff --check` passaram. Nenhuma mensagem, cobrança,
+  cliente, acesso ou painel externo foi alterado.
+- Data/hora: 2026-08-25 — catálogo Elite IPTV completo recebido
+- O endpoint informado para **Teste Grátis 12H (S/ Adulto)** foi cadastrado no
+  catálogo protegido como variante `elite_iptv:12:no_adult`. O catálogo Elite
+  agora possui as seis combinações 4h/8h/12h com e sem adulto; somente 4h com
+  adulto foi homologada por chamada real até o momento. As outras variantes
+  permanecem pendentes de teste com telefone que não esteja bloqueado pelo
+  fornecedor.
+- Foi adicionado teste unitário confirmando que checkout no host Elite é
+  considerado utilizável. Lint, 33 testes, build e diff-check passaram. Nenhuma
+  chamada real foi feita nesta inclusão, nenhuma mensagem/cobrança foi criada e
+  nenhum painel foi alterado.
+- Data/hora: 2026-08-25 — variante Elite 4h sem adulto aguardando telefone de QA
+- Foi feita uma única chamada controlada ao endpoint fornecido para **Teste
+  Grátis 4H (S/ Adulto)**, usando o mesmo telefone de QA já utilizado na
+  homologação anterior. O endpoint respondeu HTTP 400 sem acesso ou checkout;
+  o payload continha somente uma resposta curta. Como o CineHub/Elite pode
+  aplicar a trava de teste por telefone, a variante **não foi cadastrada como
+  homologada** e não houve repetição automática nem outra chamada.
+- Nenhum dado sensível foi gravado no status. Para validar esta variante, usar
+  um telefone controlado que ainda não tenha sido testado no Elite ou solicitar
+  liberação/reset ao fornecedor; depois repetir somente com autorização.
+- Data/hora: 2026-08-25 — Elite IPTV homologado em chamada controlada
+- Com autorização explícita do operador, foi chamada uma vez a URL protegida do
+  endpoint Elite IPTV para o telefone de QA fornecido e nome informado. A
+  resposta foi HTTP 200, retornou acesso completo, pacote **Teste Grátis 4H (C/
+  Adulto)**, uma conexão e `payUrl` no host Elite. Credenciais, telefone e URL
+  tokenizada não foram gravados neste handoff, logs públicos ou código.
+- O host `revenda-eliteiptv.online` foi adicionado à validação do adaptador e a
+  variante protegida `elite_iptv:4:adult` foi cadastrada no catálogo de ambiente.
+  O checkout foi reconhecido como utilizável; nenhuma segunda chamada,
+  mensagem, cobrança ou alteração em painel foi executada.
+- Lint, 33 testes, build e `git diff --check` passaram após a alteração. Próximo
+  passo: adicionar testes unitários específicos do perfil Elite e, se desejado,
+  cadastrar variantes 4h sem adulto/alturas diferentes somente com endpoints
+  fornecidos e homologados.
+- Data/hora: 2026-08-25 — dependências compatíveis aplicadas e serviços publicados
+- Com autorização do proprietário, foi executado `npm update` dentro das faixas
+  compatíveis do `package.json`. O lockfile foi atualizado; lint, 33 testes,
+  build e diff-check passaram. A auditoria caiu de 24 para 4 vulnerabilidades no
+  total durante a validação e, focando produção (`--omit=dev`), de 13 para 2
+  moderadas, sem high/critical. Não foi usado `npm audit fix --force` e não
+  houve upgrade major arriscado de React/Vite/router.
+- API, worker e frontend foram reconstruídos e recriados com Docker Compose;
+  Redis permaneceu ativo. Pós-publicação: API `/health` respondeu `status=ok`,
+  frontend respondeu HTTP 200 e os quatro serviços ficaram ativos. Nenhuma
+  mensagem, cobrança, pagamento, acesso, cliente ou painel externo foi
+  acionado.
+- Próxima revisão: tratar as duas vulnerabilidades moderadas restantes na
+  cadeia de desenvolvimento/build em rodada separada e confirmar visualmente a
+  tela `/saude` com sessão autenticada.
+- Data/hora: 2026-08-24 — observabilidade do worker adicionada e audit npm revisada
+- `server/worker.js` agora registra eventos JSON sanitizados de job iniciado,
+  concluído e com erro, incluindo somente ID do job, nome, duração e mensagem de
+  erro. O listener de falha continua atualizando a operação quando aplicável;
+  nenhum payload, token, telefone ou credencial entra no log.
+- A auditoria npm completa permanece com 24 vulnerabilidades transitivas (16
+  high, 5 moderate, 3 low; sem critical). A auditoria focada em produção havia
+  mostrado 13. As vulnerabilidades não possuem correção automática segura no
+  lock atual; não foi executado `npm audit fix` nem upgrade arriscado. O próximo
+  tratamento deve separar cadeia de build/dev de dependências runtime e atualizar
+  Vite/PostCSS/React Router/Supabase em rodada própria.
+- Serviços continuam ativos e saudáveis: API `status=ok`, frontend HTTP 200,
+  Redis healthy e worker ativo. Lint, 33 testes, build, sintaxe e diff-check
+  passaram. Nenhuma operação externa foi executada.
+- Data/hora: 2026-08-24 — observabilidade HTTP estruturada adicionada
+- A API passou a gerar `x-request-id` em cada requisição (preservando o header
+  recebido quando existir), devolver o identificador na resposta e registrar um
+  evento JSON com método, caminho, status e duração em milissegundos. Webhooks
+  ficam fora desse log para evitar exposição acidental de payloads sensíveis.
+  Nenhum token, corpo, telefone ou credencial é registrado.
+- Lint, 33 testes, build, diff-check e `/health` passaram. Nenhuma operação
+  externa foi executada. O roadmap técnico principal está concluído nesta
+  rodada, restando revisão controlada das vulnerabilidades npm e futura
+  instrumentação específica do worker.
+- Data/hora: 2026-08-24 — prioridades adicionadas à Central Operacional
+- A `CentralOperacional.jsx` agora calcula e exibe uma faixa de **Prioridades de
+  hoje** a partir do digest existente: comprovantes para revisão, pendências
+  cadastrais, códigos vencendo e lembretes planejados. Quando não há itens
+  críticos, informa isso explicitamente. Não foram adicionados efeitos de
+  escrita ou disparos automáticos.
+- Validação completa passou novamente: lint, 33 testes, build, diff-check, API
+  `status=ok` e frontend HTTP 200. Nenhum dado real ou integração externa foi
+  acionado.
+- Data/hora: 2026-08-24 — tela Saúde e Integrações publicada no painel
+- A rota protegida `/saude` foi adicionada ao frontend com
+  `src/pages/SaudeIntegracoes.jsx`. Ela consulta `/api/health/details` e mostra
+  API, banco e presença de configuração das integrações sem exibir segredos.
+  O texto deixa explícito que configuração presente não significa conexão ativa
+  nem entrega externa confirmada.
+- A tela foi adicionada ao Sidebar. Lint, 33 testes, build e `git diff --check`
+  passaram. Nenhuma integração, mensagem, cliente, pagamento ou painel externo
+  foi acionado nesta implementação. Próximo passo técnico: melhorar a Central
+  Operacional com prioridades/atalhos e iniciar observabilidade estruturada.
+- Data/hora: 2026-08-24 — endpoint autenticado de saúde das integrações criado
+- Foi criado `server/routes/systemHealth.js` com `GET /health/details`, exigindo
+  autenticação e retornando somente estados booleanos de API, banco e presença
+  de configurações de Evolution, Telegram, MiniMax, PaggPay e Efí. Nenhuma
+  chave, token, telefone ou dado de cliente é retornado. O endpoint não foi
+  chamado sem sessão e nenhuma integração externa foi acionada.
+- Validação completa passou novamente: sintaxe, lint, 33 testes, build,
+  `git diff --check` e API `/health` com `status=ok`; frontend continua 200.
+  Próximo passo é ligar uma tela administrativa protegida a esse endpoint e
+  depois revisar dependências npm vulneráveis de forma controlada.
+- Data/hora: 2026-08-24 — renovações modularizadas e CI criado
+- As rotas de renovação e comprovantes foram extraídas para
+  `server/routes/renewals.js`: abertura de renovação, registro de comprovante e
+  revisão/confirmacão humana. Os contratos, filtros por proprietário,
+  validação, idempotência de pagamento manual e chamada de `processPaidPayment`
+  foram preservados. Foi adicionado `server/renewals.test.js`, elevando a
+  suíte para 33 testes.
+- Foi criado `.github/workflows/ci.yml` com checkout, Node pela `.nvmrc`, npm ci,
+  lint, testes, build e diff-check em push/PR. A auditoria npm sem dependências
+  de desenvolvimento ainda reporta 13 vulnerabilidades (10 high, 1 moderate,
+  2 low); nenhuma correção automática foi aplicada para evitar alterar o lock
+  sem revisão. Serviços seguem saudáveis: API `status=ok`, frontend HTTP 200.
+- Nenhum cliente, acesso, pagamento, mensagem ou painel externo foi alterado.
+  Validações locais passaram: sintaxe, lint, 33 testes, build e diff-check. O
+  próximo bloco técnico é criar observabilidade/saúde de integrações e depois
+  revisar dependências vulneráveis de forma controlada.
+- Data/hora: 2026-08-24 — checklist publicado no frontend remoto
+- O primeiro acesso ao checklist retornou 403 porque o arquivo estático novo
+  herdou permissão restrita do workspace. A permissão foi corrigida para leitura
+  pública (`0644`), o frontend foi reconstruído/recriado sem dependências e a
+  rota `/checklist-validacao-financeira.html` passou a responder HTTP 200. A API
+  continuou saudável (`/health` → `status=ok`). Nenhum dado, mensagem,
+  pagamento ou integração foi alterado.
+- URL para o operador: `https://iptv.velhaturbo.cloud/checklist-validacao-financeira.html`.
+  A página permite revisar no navegador e usar Imprimir → Salvar como PDF.
+- Data/hora: 2026-08-24 — checklist financeiro acessível como página imprimível
+- Como o acesso remoto não permitia baixar links `sandbox` nem o endereço
+  `127.0.0.1`, foi criada a página pública estática
+  `public/checklist-validacao-financeira.html`. Ela apresenta o checklist em
+  português, com caixas de seleção, campos de registro e botão **Imprimir /
+  salvar em PDF**; funciona diretamente no navegador remoto e permite usar
+  Imprimir → Salvar como PDF localmente. A página foi incluída no build e
+  respondeu HTTP 200 localmente. Nenhum segredo, dado real ou integração foi
+  exposto/acionado.
+- Data/hora: 2026-08-24 — checklist financeiro disponibilizado em PDF
+- O documento de revisão manual foi convertido para PDF A4 em
+  `public/downloads/checklist-validacao-financeira-horizons.pdf`, mantendo as
+  seções de renovação, comprovante, revisão humana, webhook, idempotência,
+  Central Operacional, cenários negativos e campos de registro. A URL local
+  respondeu HTTP 200. Nenhum dado real, pagamento, mensagem ou integração foi
+  utilizado na geração.
+- Data/hora: 2026-08-23 — operações modularizadas e checklist financeiro criado
+- Como o operador informou que o smoke test do fluxo 1 está semi-validado e que
+  precisa de tempo para revisar os vínculos de acesso, a parte técnica avançou
+  sem depender dessa ação manual. Foi criado `docs/validacao-fluxo-financeiro.md`
+  com roteiro simples para validar renovação, comprovante, revisão humana,
+  webhook, separação de estados, fila operacional e critérios de aprovação.
+  O documento não contém dados reais nem dispara qualquer operação.
+- As rotas da Central Operacional foram extraídas para
+  `server/routes/operations.js`: refresh, overview, decisões de lembrete/tarefa,
+  download CSV de erros, perfis de entrega e slots de tutorial. Os contratos e
+  filtros por proprietário foram preservados; `server/api.js` agora registra o
+  módulo com dependências explícitas. Nenhum banco, cliente, acesso, pagamento,
+  mensagem ou painel externo foi alterado.
+- Validação concluída: sintaxe, lint, 32 testes do servidor, build,
+  `git diff --check`, API `status=ok` e frontend HTTP 200 passaram. Pendências do
+  operador: revisar o checklist financeiro e, quando possível, completar os
+  vínculos reais dos acessos. Próximo passo técnico: extrair outro domínio
+  coeso, provavelmente renovações/comprovantes, sem bloquear a homologação
+  manual.
+- Data/hora: 2026-08-23 — definição do próximo roadmap
+- Após a limpeza estrutural e três módulos extraídos da API, a prioridade deixa
+  de ser apenas refatoração: o maior valor operacional agora é concluir o
+  vínculo dos acessos reais e validar autenticadamente as jornadas de cliente,
+  instalação, renovação e comprovante. A modularização deve continuar em
+  paralelo, sem bloquear a operação nem tocar integrações externas sem
+  confirmação. Próxima sequência recomendada: (1) smoke test autenticado das
+  rotas novas; (2) revisar os 168 vínculos com credenciais pendentes e os 61
+  casos ambíguos; (3) homologar fila de renovações/comprovantes; (4) extrair
+  módulo de operações da API; (5) observabilidade e CI.
+- Nenhum serviço, banco, cliente, acesso, pagamento, mensagem ou painel externo
+  foi alterado nesta rodada.
+- Data/hora: 2026-08-23 — leitura de pagamentos/renovações modularizada
+- A extração da API avançou novamente com `server/routes/paymentRead.js`, que
+  passou a registrar `/integrations/receipt-extractor`, `/payments/efi` e
+  `/renewals`. O módulo recebe explicitamente Supabase, configuração,
+  autenticação e funções de configuração; os contratos de resposta e filtros
+  por proprietário foram preservados. O bloco legado foi removido de
+  `server/api.js`, sem alteração de banco, pagamentos ou dados reais.
+- A revisão estrutural não encontrou outra pendência de toast/KeepAlive nesta
+  frente: toast permanece unificado e o painel KeepAlive detalhado não é
+  forçado no shell. Validação completa passou: lint, 32 testes do servidor,
+  sintaxe dos módulos, build, `git diff --check`, API `status=ok` e frontend
+  HTTP 200. Próximo passo: continuar com um módulo de rotas de operações ou
+  integrações, extraindo dependências explicitamente e evitando mudanças
+  externas.
+- Data/hora: 2026-08-23 — webhook de pagamentos extraído da API
+- A modularização gradual avançou com `server/routes/paymentWebhook.js`, que
+  agora registra `/webhooks/payments/:provider` e recebe explicitamente as
+  dependências de configuração, Supabase, schema, indicação e fila. O trecho
+  correspondente foi retirado do fluxo ativo de `server/api.js`; o contrato de
+  assinatura HMAC, validação Zod, idempotência de `payment_events`, criação de
+  jobs/operações e resposta HTTP foram preservados. Nenhuma chamada real ao
+  webhook ou alteração de pagamento foi executada.
+- Validação concluída: `node --check` dos módulos, lint, `node --test
+  server/*.test.js` (32 testes), build, `git diff --check`, API (`status=ok`) e
+  frontend (HTTP 200) passaram. Próximo passo: extrair outro grupo isolado,
+  preferencialmente rotas de configuração/integração sem misturar regras de
+  negócio, sempre mantendo as dependências explícitas.
+- Data/hora: 2026-08-23 — logs/toasts consolidados e primeira extração da API
+- A camada pública de toast foi unificada: `src/hooks/useToast.js` agora é
+  apenas um adaptador de compatibilidade sobre `src/components/ui/use-toast.js`,
+  que passou a oferecer `success`, `error` e `info` além da API Radix original.
+  Assim, as telas antigas e novas compartilham uma única store e o mesmo
+  `Toaster`; nenhuma mensagem de negócio ou integração foi acionada.
+- O KeepAlive foi mantido por possuir uso ativo, mas o painel de debug/exportação
+  deixou de ser forçado no shell: `MainLayout` agora usa o monitor sem
+  `showDebugPanel=true`. O ping continua habilitado pelo provider, sem remover a
+  proteção operacional existente.
+- Iniciada a modularização segura do backend com
+  `server/routes/health.js`, responsável pela rota `/health`; `server/api.js`
+  apenas registra o módulo. O contrato HTTP foi preservado e não houve alteração
+  de banco, clientes, pagamentos, mensagens ou integrações externas.
+- Validação concluída: lint, `node --test server/*.test.js` (32 testes), build,
+  sintaxe, `git diff --check`, API (`status=ok`) e frontend (HTTP 200) passaram.
+  Próximo passo: extrair o próximo grupo isolado de rotas, preferencialmente
+  uma integração/webhook com dependências explícitas, mantendo o mesmo padrão
+  de registro e sem publicar alterações externas.
+- Data/hora: 2026-08-23 — scaffold legado de campanhas removido
+- A auditoria confirmou que `Campanhas.jsx`, `Templates.jsx` e
+  `src/services/envios.js` pertenciam ao painel antigo de campanhas e não eram
+  utilizados pelo backend atual nem por outras telas além das próprias rotas.
+  Os três arquivos foram removidos; as rotas e itens correspondentes também
+  foram retirados de `App.jsx` e `Sidebar.jsx`. O gerador de documentação
+  atualizou `public/llms.txt` removendo as duas páginas antigas. O log local e o
+  KeepAlive foram preservados porque ainda possuem referências ativas em
+  Configurações e no shell da aplicação, respectivamente.
+- Nenhum dado, banco, cliente, acesso, pagamento, mensagem ou integração externa
+  foi alterado. `npm run lint`, `npm run test:server` (32 testes), `npm run
+  build`, `git diff --check` e as verificações HTTP do frontend/API passaram.
+  Próximo passo recomendado: revisar a duplicação de logs/toast e o KeepAlive,
+  ou iniciar a modularização gradual de `server/api.js`.
+- Data/hora: 2026-08-23 — documentação principal atualizada
+- O `README.md` foi reescrito para refletir o Horizons atual, substituindo a
+  descrição obsoleta de painel de campanhas/Gemini por arquitetura, rotas,
+  integrações Evolution/Telegram, regras de segurança, operação Docker,
+  migrations, testes e estado operacional. Nenhum segredo, dado de cliente ou
+  credencial foi incluído.
+- A validação passou: `npm run lint`, `npm run test:server` (32 testes),
+  `npm run build` e `git diff --check`. O build gerou o frontend localmente;
+  nenhum serviço foi reiniciado e nenhuma integração, mensagem, cobrança,
+  acesso ou painel externo foi acionado. Próximo passo: revisar e remover, com
+  segurança, o scaffold legado de campanhas/templates ou iniciar a
+  modularização gradual de `server/api.js`.
+- Data/hora: 2026-08-23 — retomada e verificação após navegação publicada
+- O estado atual foi relido e as alterações locais não commitadas foram
+  confirmadas como a frente de navegação/identidade operacional: `App.jsx`
+  adotou rotas aninhadas com `Outlet`, `MainLayout.jsx` passou a navegar por
+  URL e `Sidebar.jsx` ganhou links para todas as telas, Logs e reparo de
+  telefones. Essas mudanças permanecem no worktree junto desta atualização de
+  status; não foram descartadas nem misturadas com outra frente.
+- Validação local concluída: `npm run lint`, `npm run test:server` (32 testes)
+  e `npm run build` passaram. API respondeu `status=ok`, frontend respondeu
+  HTTP 200 e os serviços Compose (`api`, `frontend`, `worker`, `redis`) estão
+  ativos. Nenhum cliente, acesso, cobrança, mensagem ou integração externa foi
+  alterado nesta rodada. Próximo passo recomendado: revisar visualmente o
+  smoke test autenticado das novas URLs e então decidir entre atualizar o
+  README, limpar o scaffold legado ou modularizar `server/api.js`.
+- Data/hora: 2026-08-23 — teste da instância oficial do bot Horizons
+- Identificada e confirmada a instância `Horizons Typebot`, conectada (`open`)
+  no número `+55 16 3185-0923`. Com confirmação explícita do usuário, ela
+  enviou uma mensagem de homologação para `+55 16 98830-2020`. A Evolution
+  aceitou o envio e gerou identificador, com estado inicial `PENDING`; resta a
+  confirmação visual do recebimento para concluir a validação ponta a ponta.
+- Data/hora: 2026-08-23 — homologação controlada Evolution e Telegram
+- Com autorização explícita do usuário, foi enviada uma mensagem de teste para
+  o WhatsApp informado via Evolution e outra para o chat administrativo já
+  autorizado no Telegram. O Telegram confirmou o envio pela API, sem erros. A
+  Evolution aceitou a mensagem e retornou identificador próprio, com estado
+  inicial `PENDING`; a confirmação visual de recebimento no aparelho ainda deve
+  ser feita pelo usuário antes de considerar a entrega ponta a ponta aprovada.
+  O primeiro acesso local à Evolution falhou por isolamento de rede; a repetição
+  autorizada fora desse isolamento alcançou corretamente o serviço. Nenhum
+  segredo foi gravado neste handoff.
+- Data/hora: 2026-08-23 — confirmação do usuário após validação autenticada
+- O smoke test autenticado do frontend foi concluído pelo usuário e está OK.
+  Evolution API e Telegram já estão criados e configurados no ambiente e são
+  as únicas integrações de comunicação mantidas no escopo atual. SMTP, Google
+  Sheets e Asaas não serão necessários e deixam de ser pendências do projeto.
+  Próxima frente: homologar, de forma controlada, os fluxos existentes que usam
+  Evolution e Telegram, sem cadastrar ou acionar integrações descartadas.
+- Data/hora: 2026-08-23 22:06 BRT — navegação e identidade operacional publicadas
+- O frontend protegido passou a usar rotas aninhadas e `Outlet`, eliminando o
+  estado local que fazia links diretos e recargas voltarem ao dashboard. Todos
+  os itens do menu agora usam URLs reais; Logs locais (`/logs`) e Reparo de
+  telefones (`/reparo-telefones`) também ficaram acessíveis. A barra lateral foi
+  atualizada para **Horizons — Central de operações**, sem marca provisória nem
+  imagem externa. Nenhum cliente, cobrança, credencial ou integração real foi
+  alterado. Lint, build, `git diff --check` e os 9 testes do servidor passaram.
+  A imagem do frontend foi reconstruída e somente esse serviço foi recriado;
+  `/`, `/central` e `/reparo-telefones` responderam HTTP 200, e a API permaneceu
+  saudável em `/health`. O npm ainda reporta 24 vulnerabilidades conhecidas no
+  build. Próximo passo: smoke test autenticado e configuração operacional que
+  depende dos acessos reais do usuário.
+- Data/hora: 2026-08-23 21:59 BRT — retomada pelo handoff e confirmação do runtime
+- `PROJECT_STATUS.md`, o status legado em `projects/horizons/status.md`, o README,
+  o diff local e os commits recentes foram revisados sem alteração de código,
+  banco ou integrações. O handoff principal continua sendo a fonte mais atual;
+  o espelho legado permanece defasado e o README ainda descreve o scaffold
+  anterior. API e frontend responderam normalmente, e os quatro serviços do
+  Compose (`api`, `frontend`, `worker`, `redis`) continuam ativos. A única
+  alteração local permanece este próprio handoff. O ponto de decisão segue
+  sendo escolher a próxima frente entre corrigir a navegação/identidade do
+  produto, reduzir a dívida estrutural ou avançar as pendências operacionais de
+  acessos reais, financeiro e homologações externas.
+- Data/hora: 2026-08-23 19:44 BRT — revisão de código/arquitetura (somente leitura)
+- Rodada de diagnóstico sem alteração de código, banco, serviços, mensagens,
+  cobrança ou painel. API (`127.0.0.1:8081/health` → `status=ok`), frontend
+  (`127.0.0.1:3100` → 200) e n8n (`/healthz` → 200) responderam normalmente;
+  containers `api`, `frontend`, `worker` e `redis` seguem ativos e o worktree
+  está limpo. O `.env` permanece gitignored (somente `.env.local.example` é
+  versionado) e `dist/` não é rastreado.
+- Achados estruturais priorizados: (1) navegação dupla conflitante — o
+  `react-router` de `App.jsx` define rotas `/clientes`, `/planos`, `/logs` etc.
+  que sempre caem em `MainLayout`, que ignora a URL e abre `dashboard`; as
+  páginas novas (Testes, Central, Cobranças, Renovações, Assistente, Conexões,
+  Operações, Procedimentos, Captação, Indicações) só existem como estado no
+  Sidebar, sem URL/deep-link/refresh. `Logs.jsx`, `PhoneNumberRepairPage.jsx` e
+  `HomePage.jsx` ficam inacessíveis. (2) `server/api.js` é monolítico com ~3.233
+  linhas e ~71 rotas misturando pagamentos, IA, painéis e webhooks. (3)
+  `README.md` descreve o scaffold antigo ("WhatsApp Admin Panel + Gemini +
+  campanhas") e não o Horizons. (4) o espelho GBrain
+  `projects/horizons/status.md` está defasado (conteúdo de 2026-08-05) enquanto
+  este arquivo vai até 2026-08-18; sincronização depende de MCP/CLI disponível.
+- Dívida de scaffold legado a decidir: `Campanhas.jsx` (~1.437 linhas),
+  `Templates.jsx`, `src/services/envios.js`, `src/services/logs.js` (log em
+  localStorage) e o subsistema KeepAlive (`SupabaseKeepAlive*` + monitor de
+  debug sempre visível) vieram do painel de campanhas original e o backend só
+  os referencia marginalmente. Há duplicação de toast (`hooks/useToast` vs
+  `components/ui/use-toast`). O Sidebar exibe rótulos "Admin Panel / WhatsApp
+  Manager", logo externo hardcoded e `v1.0.0` que não refletem o produto.
+- Oportunidades de robustez/ops mapeadas: logs estruturados (hoje só `console`),
+  rate-limit/replay em webhooks, métricas, CI (não há `.github/workflows`),
+  testes de frontend (só `node --test server/*.test.js`), módulos de pagamento
+  com maior cobertura, backup de banco e centralização/validação de configuração.
+  `package.json` segue como `web-app` v0.0.0 e a auditoria npm mantém 24
+  vulnerabilidades preexistentes. Nenhum arquivo foi alterado além desta nota;
+  o próximo passo é o proprietário escolher quais frentes priorizar.
 - Data/hora: 2026-08-18 15:26 BRT — Central Operacional segura publicada
 - Foi aplicada a migration `20260818060000_operations_control_center.sql` e
   publicada a nova tela **Central Operacional**. Ela consolida pendências de

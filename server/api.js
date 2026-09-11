@@ -18,6 +18,24 @@ import { executeReadOnlyAdminTool } from './adminReadTools.js';
 import { evolutionIsConfigured, sendEvolutionText } from './evolution.js';
 import { classifyCustomerIdentity } from './customerIdentity.js';
 import { normalizeImportText, parseCustomerAccessFile } from './customerAccessImport.js';
+import { registerHealthRoute } from './routes/health.js';
+import { registerPaymentWebhookRoute } from './routes/paymentWebhook.js';
+import { registerPaymentReadRoutes } from './routes/paymentRead.js';
+import { registerOperationsRoutes } from './routes/operations.js';
+import { registerRenewalRoutes } from './routes/renewals.js';
+import { registerSystemHealthRoute } from './routes/systemHealth.js';
+import { registerCustomerServerRoutes } from './routes/customerServer.js';
+import { registerSimulatorRoutes } from './routes/simulator.js';
+import { registerBillingRoutes } from './routes/billing.js';
+import { registerPaymentOverviewRoutes } from './routes/renewals.js';
+import { registerRenewalListRoutes } from './routes/renewalList.js';
+import { registerCatalogRoutes } from './routes/catalog.js';
+import { registerWplayRoutes } from './routes/wplay.js';
+import { resolveBotInstall, createWplayTrial, activateWplayApp, wplayBotStatus } from './wplayBotFlow.js';
+import { WWPANEL_APPS } from './wplayCatalog.js';
+import { runTelegramCommand, parseTelegramCommand } from './telegramCommands.js';
+import { sendTelegramMessage } from './telegramDigest.js';
+import { registerAuditRoute, webhookRateLimit, recordWebhookEvent } from './routes/audit.js';
 
 const paymentSchema = z.object({
   event_id: z.string().min(1),
@@ -245,7 +263,27 @@ const app = express();
 app.disable('x-powered-by');
 app.use(cors({ origin: false }));
 app.use(express.json({ limit: '256kb', verify: (request, _, buffer) => { request.rawBody = buffer.toString('utf8'); } }));
-app.get('/health', (_, response) => response.json({ status: 'ok' }));
+app.use((request, response, next) => {
+  const requestId = request.get('x-request-id') || crypto.randomUUID();
+  const startedAt = process.hrtime.bigint();
+  request.requestId = requestId;
+  response.set('x-request-id', requestId);
+  response.on('finish', () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    if (!request.path.startsWith('/webhooks/')) console.info(JSON.stringify({ event: 'http_request', request_id: requestId, method: request.method, path: request.path, status: response.statusCode, duration_ms: Math.round(durationMs) }));
+  });
+  next();
+});
+registerHealthRoute(app);
+registerSystemHealthRoute(app, { requireAuthenticatedUser, config, supabase });
+registerAuditRoute(app, { supabase, requireAuthenticatedUser });
+registerSimulatorRoutes(app, { requireAuthenticatedUser });
+registerBillingRoutes(app, { supabase, requireAuthenticatedUser });
+registerPaymentOverviewRoutes(app, { supabase, requireAuthenticatedUser });
+registerRenewalListRoutes(app, { supabase, requireAuthenticatedUser, config });
+registerCatalogRoutes(app, { supabase, requireAuthenticatedUser, z, config });
+registerWplayRoutes(app, { supabase, requireAuthenticatedUser, config, z });
+const webhookGuard = webhookRateLimit({ windowMs: 60_000, max: 60 });
 
 async function requireAuthenticatedUser(request, response, next) {
   const authorization = request.get('authorization') || '';
@@ -1220,6 +1258,8 @@ function adminActionSummary(tool, args) {
   if (tool === 'set_customer_payment_status') return `Alterar situação de pagamento\n\nCliente procurado: ${args.query}\nNova situação: ${args.paid ? 'pago' : 'pendente'}`;
   if (tool === 'register_customer_access') return `Registrar acesso somente no Horizons\n\nCliente procurado: ${args.query}\nServidor: ${String(args.server).toUpperCase()}\nUsuário: ${args.external_username}\nPlano: ${args.external_plan || 'não informado'}\nTelas: ${args.screens}\nValidade: ${args.valid_until || 'não informada'}\nMotivo: ${args.reason}\n\nEsta ação não acessa nem altera o painel do servidor.`;
   if (tool === 'prepare_customer_charge') return `Preparar cobrança do cliente\n\nCliente procurado: ${args.query}\nValor: ${args.amount ? `R$ ${Number(args.amount).toFixed(2).replace('.', ',')}` : 'mensalidade cadastrada'}\n\nSerá usado o checkout ativo existente; somente se não houver checkout será criado um Pix PaggPay. Nada será enviado ao WhatsApp.`;
+  if (tool === 'billing_reminder_decision') return `Decidir lembrete de cobrança\n\nID: ${(args.id || '').slice(0, 8)}\nAção: ${args.status === 'approved' ? 'Aprovar (envio NÃO ocorre automaticamente)' : 'Cancelar lembrete'}`;
+  if (tool === 'recovery_decision') return `Marcar cliente como recuperado\n\nID: ${(args.id || '').slice(0, 8)}\nAção: marcar como recuperado (sair da fila de recuperação)`;
   const content = args.content === 'complete' ? 'Completo' : 'Sem adultos';
   return `Criar teste CineHub para terceiro\n\nNome: ${args.beneficiary_name}\nWhatsApp: +${normalizedPhone(args.phone)}\nUso: ${args.device_category || 'não informado'}${args.manufacturer ? ` / ${args.manufacturer}` : ''}\nServidor: ${(args.server || 'kyros').toUpperCase()}\nDuração: ${args.duration_hours || 6} horas\nConteúdo: ${content}`;
 }
@@ -1481,6 +1521,20 @@ async function executeAdminConfirmation(confirmation) {
     if (prepared.mode === 'pix_reconciliation_pending') return { text: `⚠️ A PaggPay criou o Pix para ${prepared.customer.name}, mas o registro interno ficou pendente de reconciliação.\n\nPix copia e cola:\n${prepared.charge.pixCode}\n\nNão gere outra cobrança para este cliente antes da conferência.` };
     return { text: `✅ Cobrança Pix criada para ${prepared.customer.name}.\nValor: R$ ${Number(prepared.amount).toFixed(2).replace('.', ',')}\n\nPix copia e cola:\n${prepared.charge.pixCode}\n\nNada foi enviado ao WhatsApp.` };
   }
+  if (confirmation.tool_name === 'billing_reminder_decision') {
+    const { error: reminderError } = await supabase.from('billing_reminder_queue')
+      .update({ status: args.status, approved_by: config.horizonsOwnerUserId, approved_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('id', args.id).eq('user_id', config.horizonsOwnerUserId).eq('status', 'planned');
+    if (reminderError) throw reminderError;
+    return { text: `✅ Lembrete ${args.id.slice(0, 8)} marcado como ${args.status === 'approved' ? 'aprovado (envio NÃO ocorre automaticamente)' : 'cancelado'}.` };
+  }
+  if (confirmation.tool_name === 'recovery_decision') {
+    const { error: recoveryError } = await supabase.from('customer_recovery_queue')
+      .update({ status: args.status, updated_at: new Date().toISOString() })
+      .eq('id', args.id).eq('user_id', config.horizonsOwnerUserId).in('status', ['pending', 'reminded']);
+    if (recoveryError) throw recoveryError;
+    return { text: `✅ Cliente ${args.id.slice(0, 8)} marcado como recuperado. Nenhuma mensagem foi enviada.` };
+  }
   if (confirmation.tool_name === 'import_customer_access_batch') {
     const { data, error } = await supabase.rpc('execute_customer_access_import_batch', {
       p_user_id: config.horizonsOwnerUserId, p_batch_id: args.batch_id,
@@ -1496,6 +1550,25 @@ async function processAdminAssistantTelegram({ userId, chatId, text, messageId }
     const { data: duplicate } = await supabase.from('admin_assistant_audit').select('id')
       .eq('user_id', config.horizonsOwnerUserId).eq('channel', 'telegram').eq('message_id', messageId).maybeSingle();
     if (duplicate) return;
+  }
+  // Atalho para comandos financeiros diretos (sem passar pelo MiniMax).
+  const parsed = parseTelegramCommand(text);
+  if (parsed) {
+    const known = ['baixa', 'aprovacoes', 'recuperacao', 'renovacoes', 'digest', 'lembretes', 'semacesso', 'semcheckout', 'semcredenciais', 'aprovar', 'rejeitar', 'recuperar', 'hoje'];
+    if (known.includes(parsed.name)) {
+      const result = await runTelegramCommand(supabase, config, parsed.name, parsed.args);
+      if (result.confirmation) {
+        const confirmation = await createAdminConfirmation(result.confirmation.tool, result.confirmation.args, userId);
+        await sendTelegramAdminMessage(chatId, `⚠️ CONFIRMAÇÃO OBRIGATÓRIA\n\n${confirmation.summary}\n\nExpira em 10 minutos.`, {
+          inline_keyboard: [[{ text: '✅ Confirmar', callback_data: `confirm:${confirmation.id}` }, { text: '❌ Cancelar', callback_data: `cancel:${confirmation.id}` }]],
+        });
+        await auditAdminAssistant({ sender_reference: String(userId), message_id: messageId, request_text: text, tool_name: result.confirmation.tool, tool_arguments: result.confirmation.args, model: 'direct', status: 'clarification', result_summary: { confirmation_required: true } }, 'telegram');
+        return;
+      }
+      await sendTelegramAdminMessage(chatId, result.text);
+      await auditAdminAssistant({ sender_reference: String(userId), message_id: messageId, request_text: text, tool_name: 'telegram_command', tool_arguments: { name: parsed.name, args: parsed.args }, model: 'direct', status: 'completed', result_summary: { reply: result.text } }, 'telegram');
+      return;
+    }
   }
   const exactWhatsapp = text.match(/(?:envie|enviar|mande|mandar)[\s\S]*?whatsapp[\s\S]*?para\s*\+?(\d[\d\s().-]{7,})[\s\S]*?mensagem\s+exata\s*:\s*([\s\S]+)/i);
   if (exactWhatsapp) {
@@ -1661,7 +1734,7 @@ app.post('/webhooks/telegram/admin', (request, response) => {
     }));
 });
 
-app.post('/webhooks/evolution', async (request, response) => {
+app.post('/webhooks/evolution', webhookGuard, async (request, response) => {
   if (!config.evolutionWebhookToken || !config.horizonsOwnerUserId) {
     return response.status(503).json({ error: 'Webhook de entrada não configurado.' });
   }
@@ -1677,8 +1750,10 @@ app.post('/webhooks/evolution', async (request, response) => {
     console.error('Falha ao arquivar conversa de suporte', error.message);
   }
   const inboundMedia = evolutionInboundMedia(request.body || {});
-  const isFinanceMedia = inboundMedia && (!config.evolutionFinanceInstance
-    || inboundMedia.instanceName === config.evolutionFinanceInstance);
+  const receiptInstances = [config.evolutionFinanceInstance, config.evolutionSalesInstance]
+    .filter((instance) => instance && String(instance).trim());
+  const isFinanceMedia = inboundMedia && (receiptInstances.length === 0
+    || receiptInstances.includes(inboundMedia.instanceName));
   if (inboundMedia?.phone && inboundMedia?.messageId && isFinanceMedia) {
     response.status(202).json({ accepted: true, media: true });
     setImmediate(() => processEvolutionReceipt(inboundMedia).catch((error) => console.error('Falha no webhook Evolution', error.message)));
@@ -2028,6 +2103,95 @@ app.post('/typebot/guides/recommend', async (request, response) => {
     codes_source: 'cinehub_test_server_response',
     guide: best.guide,
   });
+});
+
+app.get('/typebot/wplay/status', async (request, response) => {
+  if (!requireTypebotBridge(request, response)) return;
+  return response.json(wplayBotStatus(config));
+});
+
+// Orientação de instalação vinda do catálogo do próprio painel (somente leitura).
+app.post('/typebot/wplay/install', async (request, response) => {
+  if (!requireTypebotBridge(request, response)) return;
+  const parsed = z.object({
+    product: z.enum(['iptv', 'p2p', 'krator', 'nexus', 'whot']).optional(),
+    brand: z.string().trim().max(40).optional(),
+    device: z.string().trim().max(40).optional(),
+    username: z.string().trim().max(80).optional(),
+    password: z.string().trim().max(80).optional(),
+  }).safeParse(request.body ?? {});
+  if (!parsed.success) return response.status(400).json({ error: 'Consulta de instalação inválida.', details: parsed.error.flatten() });
+  try {
+    const result = await resolveBotInstall(config, parsed.data);
+    return response.json({ ...result, source: 'panel-links' });
+  } catch (error) {
+    return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });
+  }
+});
+
+// Cria o teste no WPlay e, se o MAC vier junto, já ativa o app nesse teste.
+// Ativar app em teste não consome crédito; criar o teste continua atrás do gate.
+app.post('/typebot/wplay/trials', async (request, response) => {
+  if (!requireTypebotBridge(request, response)) return;
+  const parsed = z.object({
+    product: z.enum(['iptv', 'p2p', 'krator', 'nexus']).optional(),
+    package_iptv: z.number().int().optional(),
+    package_p2p: z.string().trim().max(64).optional(),
+    package_krator: z.string().trim().max(64).optional(),
+    package_nexus: z.number().int().optional(),
+    serviceId: z.string().trim().max(64).optional(),
+    testDuration: z.number().int().min(1).max(72).optional(),
+    whatsapp: z.string().trim().max(32).optional(),
+    country: z.string().trim().max(4).optional(),
+    notes: z.string().trim().max(500).optional(),
+    mac: z.string().trim().max(64).optional(),
+    nameApp: z.enum(WWPANEL_APPS).optional(),
+    namePlaylist: z.string().trim().max(120).optional(),
+    name: z.string().trim().max(120).optional(),
+  }).safeParse(request.body ?? {});
+  if (!parsed.success) return response.status(400).json({ error: 'Pedido de teste inválido.', details: parsed.error.flatten() });
+  try {
+    const result = await createWplayTrial(config, parsed.data);
+    if (!result.ok) {
+      const status = result.reason === 'not_configured' || result.reason === 'writes_disabled' ? 503 : 400;
+      const message = result.reason === 'writes_disabled'
+        ? 'Teste automático indisponível agora; um atendente continua o pedido.'
+        : result.reason === 'not_configured'
+          ? 'Teste automático indisponível agora; um atendente continua o pedido.'
+          : 'Não foi possível montar o teste com os dados recebidos.';
+      return response.status(status).json({ error: message, reason: result.reason });
+    }
+    return response.status(201).json(result);
+  } catch (error) {
+    return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });
+  }
+});
+
+// Ativa o app de um teste já criado (o cliente mandou o MAC depois).
+app.post('/typebot/wplay/app', async (request, response) => {
+  if (!requireTypebotBridge(request, response)) return;
+  const parsed = z.object({
+    nameApp: z.enum(WWPANEL_APPS).optional(),
+    appText: z.string().trim().max(60).optional(),
+    mac: z.string().trim().min(1).max(64),
+    namePlaylist: z.string().trim().max(120).optional(),
+    id_user: z.union([z.string().trim().max(64), z.number().int()]),
+  }).safeParse(request.body ?? {});
+  if (!parsed.success) return response.status(400).json({ error: 'Pedido de ativação inválido.', details: parsed.error.flatten() });
+  try {
+    const result = await activateWplayApp(config, parsed.data);
+    if (!result.ok) {
+      const message = result.reason === 'app_requires_login'
+        ? 'Esse aplicativo entra com usuário e senha, não por MAC; um atendente vai concluir.'
+        : result.reason === 'missing_fields'
+          ? 'Não reconheci o aplicativo ou o MAC; um atendente vai continuar.'
+          : 'Não foi possível ativar o aplicativo agora; um atendente vai continuar.';
+      return response.status(result.reason === 'missing_fields' ? 400 : 503).json({ error: message, reason: result.reason });
+    }
+    return response.json(result);
+  } catch (error) {
+    return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });
+  }
 });
 
 app.get('/typebot/offers', async (request, response) => {
@@ -2517,75 +2681,8 @@ app.get('/integrations/union/direct-tests', requireAuthenticatedUser, async (req
   return response.json({ configured: unionDirectTestIsConfigured(config), tests: data || [] });
 });
 
-app.get('/customers/:id/server-accesses', requireAuthenticatedUser, async (request, response) => {
-  const { data: customer, error: customerError } = await supabase.from('customers').select('id,name')
-    .eq('id', request.params.id).eq('user_id', request.horizonsUser.id).maybeSingle();
-  if (customerError) return response.status(500).json({ error: 'Não foi possível consultar o cliente.' });
-  if (!customer) return response.status(404).json({ error: 'Cliente não encontrado.' });
-  const [
-    { data: servers, error: serversError },
-    { data: legacyServers, error: legacyServersError },
-    { data: accesses, error: accessesError },
-    { data: history, error: historyError },
-  ] = await Promise.all([
-    supabase.from('cinehub_servers').select('id,code,name,active,is_default_trial').eq('user_id', request.horizonsUser.id).order('name'),
-    supabase.from('servers').select('id,name').eq('user_id', request.horizonsUser.id).order('name'),
-    supabase.from('customer_panel_targets').select('id,server_id,cinehub_server_id,external_username,external_plan,screens,active,is_primary,dns,checkout_url,access_password_ciphertext,valid_until,deactivated_at,replaced_by_target_id,created_at')
-      .eq('user_id', request.horizonsUser.id).eq('customer_id', customer.id).order('created_at', { ascending: false }),
-    supabase.from('customer_server_history').select('id,customer_panel_target_id,from_server_id,to_server_id,reason,source,metadata,created_at')
-      .eq('user_id', request.horizonsUser.id).eq('customer_id', customer.id).order('created_at', { ascending: false }).limit(100),
-  ]);
-  if (serversError || legacyServersError || accessesError || historyError) {
-    return response.status(500).json({ error: 'Não foi possível consultar os acessos e o histórico do cliente.' });
-  }
-  const serverMap = new Map((servers || []).map((server) => [server.id, server]));
-  const legacyServerMap = new Map((legacyServers || []).map((server) => [server.id, server]));
-  return response.json({
-    customer,
-    servers: servers || [],
-    accesses: (accesses || []).map((access) => {
-      const { access_password_ciphertext: passwordCiphertext, ...safeAccess } = access;
-      return {
-        ...safeAccess,
-        server: serverMap.get(access.cinehub_server_id) || legacyServerMap.get(access.server_id) || null,
-        server_type: access.cinehub_server_id ? 'cinehub' : access.server_id ? 'legacy' : null,
-        credentials_complete: Boolean(access.external_username && passwordCiphertext),
-      };
-    }),
-    history: (history || []).map((entry) => ({
-      ...entry,
-      from_server: serverMap.get(entry.from_server_id) || null,
-      to_server: serverMap.get(entry.to_server_id) || null,
-    })),
-  });
-});
-
-app.post('/customers/:id/server-migrations', requireAuthenticatedUser, async (request, response) => {
-  const parsed = customerServerMigrationSchema.safeParse(request.body);
-  if (!parsed.success) return response.status(400).json({ error: 'Dados do novo acesso inválidos.', details: parsed.error.flatten() });
-  const data = parsed.data;
-  const { data: result, error } = await supabase.rpc('migrate_customer_server_access', {
-    p_user_id: request.horizonsUser.id,
-    p_customer_id: request.params.id,
-    p_to_server_id: data.to_server_id,
-    p_reason: data.reason,
-    p_external_username: data.external_username,
-    p_external_plan: data.external_plan || null,
-    p_screens: data.screens,
-    p_dns: data.dns || null,
-    p_checkout_url: data.checkout_url || null,
-    p_access_password_ciphertext: sealAccessValue(data.password, config.webhookSharedSecret),
-    p_access_message_ciphertext: sealAccessValue(data.access_message, config.webhookSharedSecret),
-    p_valid_until: data.valid_until || null,
-    p_changed_by: request.horizonsUser.id,
-    p_source: 'manual',
-  });
-  if (error) {
-    console.error('Falha ao migrar acesso de servidor', error.message);
-    return response.status(500).json({ error: error.message || 'Não foi possível trocar o servidor do cliente.' });
-  }
-  return response.status(201).json({ migrated: true, result });
-});
+// Customer server access routes moved to server/routes/customerServer.js
+registerCustomerServerRoutes(app, { supabase, requireAuthenticatedUser, customerServerMigrationSchema, sealAccessValue, config, z });
 
 // Configure respostas URL do BotBot para este callback. A primeira chamada é
 // armazenada integralmente para homologar o formato real antes de qualquer
@@ -2662,35 +2759,18 @@ async function processEvolutionReceipt(media) {
   }
 }
 
-app.get('/integrations/receipt-extractor', requireAuthenticatedUser, (_, response) => {
-  response.json({ configured: receiptExtractorIsConfigured(config), provider: config.receiptAiProvider, model: receiptExtractorModel(config) });
+// Rotas de leitura de pagamentos e renovações registradas por módulo.
+registerPaymentReadRoutes(app, {
+  supabase,
+  config,
+  requireAuthenticatedUser,
+  efiIsConfigured,
+  receiptExtractorIsConfigured,
+  receiptExtractorModel,
 });
 
-app.get('/payments/efi', requireAuthenticatedUser, async (request, response) => {
-  const { data: customers, error: customersError } = await supabase.from('customers').select('id,name')
-    .eq('user_id', request.horizonsUser.id).order('name').limit(1000);
-  if (customersError) return response.status(500).json({ error: 'Não foi possível carregar clientes para as cobranças.' });
-  const ids = (customers || []).map((customer) => customer.id);
-  if (!ids.length) return response.json({ environment: config.efiEnvironment, configured: efiIsConfigured(config), payments: [] });
-  const { data: payments, error } = await supabase.from('payment_events')
-    .select('id,customer_id,status,amount,external_payment_id,paid_at,created_at')
-    .eq('provider', 'efi').in('customer_id', ids).order('created_at', { ascending: false }).limit(100);
-  if (error) return response.status(500).json({ error: 'Não foi possível carregar as cobranças.' });
-  const names = new Map((customers || []).map((customer) => [customer.id, customer.name]));
-  return response.json({
-    environment: config.efiEnvironment,
-    configured: efiIsConfigured(config),
-    payments: (payments || []).map((payment) => ({ ...payment, customer_name: names.get(payment.customer_id) || 'Cliente removido' })),
-  });
-});
-
-app.get('/renewals', requireAuthenticatedUser, async (request, response) => {
-  const { data, error } = await supabase.from('renewal_requests').select('*,pix_receipts(*)')
-    .eq('user_id', request.horizonsUser.id).order('created_at', { ascending: false }).limit(200);
-  if (error) return response.status(500).json({ error: 'Não foi possível carregar as renovações.' });
-  return response.json({ renewals: data || [] });
-});
-
+/* operations routes moved to server/routes/operations.js */
+/*
 app.post('/operations/refresh', requireAuthenticatedUser, async (request, response) => {
   const { data, error } = await supabase.rpc('refresh_horizons_operations', { p_user_id: request.horizonsUser.id });
   if (error) return response.status(500).json({ error: error.message });
@@ -2761,7 +2841,8 @@ app.post('/operations/delivery-profiles', requireAuthenticatedUser, async (reque
   const payload = { user_id: request.horizonsUser.id, legacy_server_id: body.legacy_server_id || null, cinehub_server_id: body.cinehub_server_id || null,
     app_name: String(body.app_name).trim(), device_category: body.device_category || 'android_tv', partner_code: body.partner_code || null,
     downloader_code: body.downloader_code || null, ntdown_code: body.ntdown_code || null, download_url: body.download_url || null,
-    dns: body.dns || null, instructions: body.instructions || null, valid_from: body.valid_from || null, valid_until: body.valid_until || null };
+    dns: body.dns || null, instructions: body.instructions || null, valid_from: body.valid_from || null, valid_until: body.valid_until || null,
+    changed_by: request.horizonsUser.id };
   const { data, error } = await supabase.from('server_delivery_profiles').insert(payload).select('*').single();
   if (error) return response.status(500).json({ error: error.message });
   return response.status(201).json({ profile: data });
@@ -2773,11 +2854,17 @@ app.post('/operations/tutorial-slots', requireAuthenticatedUser, async (request,
   const { data, error } = await supabase.from('tutorial_media_slots').insert({ user_id: request.horizonsUser.id,
     device_category: body.device_category, manufacturer: body.manufacturer || null, title: String(body.title).trim(),
     media_type: body.media_type || 'video', media_url: body.media_url || null, script_notes: body.script_notes || null,
-    status: body.media_url ? 'published' : 'pending_recording' }).select('*').single();
+    status: body.media_url ? 'published' : 'pending_recording', changed_by: request.horizonsUser.id }).select('*').single();
   if (error) return response.status(500).json({ error: error.message });
   return response.status(201).json({ tutorial: data });
 });
 
+*/
+
+registerOperationsRoutes(app, { supabase, requireAuthenticatedUser });
+
+/* renewal and receipt routes moved to server/routes/renewals.js */
+/*
 app.post('/renewals', requireAuthenticatedUser, async (request, response) => {
   const parsed = renewalRequestSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: 'Solicitação inválida.', details: parsed.error.flatten() });
@@ -2838,6 +2925,10 @@ app.post('/renewals/:renewalId/receipts/:receiptId/review', requireAuthenticated
   await supabase.from('renewal_requests').update({ status: 'renewal_pending', confirmed_payment_event_id: event?.id || null, updated_at: now }).eq('id', renewal.id);
   return response.json({ accepted: true, status: 'renewal_pending' });
 });
+
+*/
+
+registerRenewalRoutes(app, { supabase, requireAuthenticatedUser, renewalRequestSchema, receiptSchema, receiptReviewSchema, validateReceipt, processPaidPayment, config, sendTelegramMessage });
 
 app.post('/payments/paggpay/pix', requireAuthenticatedUser, async (request, response) => {
   if (!paggpayIsConfigured(config)) return response.status(503).json({ error: 'PaggPay ainda não está configurada na VPS.' });
@@ -2945,7 +3036,7 @@ app.post('/typebot/renewals/paggpay', async (request, response) => {
   }
 });
 
-app.post('/webhooks/paggpay', async (request, response) => {
+app.post('/webhooks/paggpay', webhookGuard, async (request, response) => {
   const expectedToken = config.paggpayWebhookToken || '';
   const signed = expectedToken.startsWith('whsec_')
     && verifyPaggpayWebhookSignature(request.rawBody, request.get('x-paggpay-webhook-signature'), expectedToken);
@@ -3114,7 +3205,7 @@ app.post('/payments/efi/webhook/register', requireAuthenticatedUser, async (_, r
   }
 });
 
-app.post('/webhooks/efi', async (request, response) => {
+app.post('/webhooks/efi', webhookGuard, async (request, response) => {
   const supplied = String(request.query.token || '');
   const expected = config.efiWebhookToken || '';
   if (!expected || supplied.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) {
@@ -3147,6 +3238,8 @@ app.post('/webhooks/efi', async (request, response) => {
   }
 });
 
+/* payment webhook moved to server/routes/paymentWebhook.js */
+/*
 app.post('/webhooks/payments/:provider', async (request, response) => {
   const expected = crypto.createHmac('sha256', config.webhookSharedSecret).update(JSON.stringify(request.body)).digest('hex');
   const received = request.get('x-horizons-signature') || '';
@@ -3228,6 +3321,16 @@ app.post('/webhooks/payments/:provider', async (request, response) => {
     }
   }
   return response.status(202).json({ accepted: true });
+});
+*/
+
+registerPaymentWebhookRoute(app, {
+  supabase,
+  config,
+  paymentSchema,
+  processReferralFirstPayment,
+  enqueueOperation,
+  recordWebhookEvent,
 });
 
 app.listen(config.port, () => console.log(`Horizons API escutando na porta ${config.port}`));

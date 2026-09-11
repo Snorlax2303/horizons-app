@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet';
-import { Plus, Edit2, Trash2, MoreVertical, CheckCircle2, XCircle, RefreshCw, Smartphone, Server, KeyRound } from 'lucide-react';
+import { Plus, Edit2, Trash2, MoreVertical, CheckCircle2, XCircle, RefreshCw, Smartphone, Server, KeyRound, Tv } from 'lucide-react';
 import Button from '@/components/Common/Button';
 import Input from '@/components/Common/Input';
 import Table from '@/components/Common/Table';
@@ -25,6 +26,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 const Clientes = () => {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { success, error: toastError, warning } = useToastNotification();
 
@@ -449,7 +451,7 @@ const Clientes = () => {
       <div className="space-y-6 flex flex-col h-full">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div><h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Clientes</h1><p className="text-gray-600 dark:text-gray-400 mt-1">Gerencie sua base de clientes</p></div>
-          <div className="flex items-center gap-3"><Button variant="outline" icon={RefreshCw} onClick={() => { captureScrollPosition(); setIsResetModalOpen(true); }}>Virar Mês</Button><Button variant="primary" icon={Plus} onClick={handleOpenCreate}>Novo Cliente</Button></div>
+          <div className="flex items-center gap-3"><Button variant="outline" icon={RefreshCw} onClick={() => { captureScrollPosition(); setIsResetModalOpen(true); }}>Virar Mês</Button><Button variant="outline" icon={Tv} onClick={() => navigate('/wplay')}>WPlay</Button><Button variant="primary" icon={Plus} onClick={handleOpenCreate}>Novo Cliente</Button></div>
         </div>
 
         <FilterBar servers={servers} plans={plans} filters={filters} onFilterChange={handleFilterChange} />
