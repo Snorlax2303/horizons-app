@@ -107,6 +107,23 @@
 - A operação foi feita pelo cliente verificado (`server/wplayPanel.js`) direto no painel;
   a rota HTTP do Horizons continua atrás do gate `WWPANEL_WRITES_ENABLED=false` e o
   container `api` **não** foi reiniciado.
+- Data/hora: 2026-09-12 — vínculo cliente ↔ linha WPlay (`id_user`) + Opção B
+- **Vínculo** (`server/wplayLink.js`): toda escrita que conhece o cliente grava a
+  linha do painel em `customer_panel_targets` — `external_line_id`/`external_customer_id`
+  (kind `production`) ou `external_test_line_id` (kind `test`). A ativação de app por
+  MAC agora resolve o `id_user` pelo vínculo (rota e ponte do bot) e registra
+  `mac_address`/`app_activated_at` em `customer_access_credentials`. Trial via bot
+  (`/typebot/wplay/trials`) aceita `customerId` e vincula sozinho.
+- **Opção B (decisão do dono: SEMPRE validar pagamento antes de criar/renovar)**:
+  `paymentGate` nas rotas de criação de cliente pago, extend, +48h, plano e activate.
+  Prova de pagamento = `customers.paid` OU `payment_events` status `paid` na janela
+  `WWPANEL_PAYMENT_WINDOW_DAYS` (padrão 14). Sem cliente vinculado → 400
+  `customer_missing`; sem pagamento → 402 `payment_unconfirmed`. Trials seguem livres
+  (pré-venda, sem crédito de plano).
+- **Ponte do bot** também agora respeita as flags granulares (trials exige
+  `WWPANEL_TESTS_ENABLED`, app exige `WWPANEL_APP_ACTIVATION_ENABLED`).
+- **Testes**: 100/100 (novos: gates de pagamento, vínculo de produção/teste, resolução
+  de `id_user`, registro de MAC).
 - Data/hora: 2026-09-11 — gate granular por operação WPlay implementado e publicado (Opção A)
 - **Entregue**: `WWPANEL_WRITES_ENABLED` segue como chave-mestra e cada operação ganhou
   flag própria em `server/config.js` — `WWPANEL_TESTS_ENABLED`, `WWPANEL_CUSTOMERS_ENABLED`,

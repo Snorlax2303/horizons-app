@@ -46,7 +46,7 @@ export function normalizeTrialResult(result) {
 export function wplayBotStatus(config) {
   return {
     configured: wwpanelConfigured(config),
-    enabled: Boolean(config?.wwpanelWritesEnabled),
+    enabled: Boolean(config?.wwpanelWritesEnabled && config?.wwpanelTestsEnabled),
     products: WPLAY_TRIAL_PRODUCTS,
   };
 }
@@ -78,7 +78,7 @@ export async function createWplayTrial(config, input = {}, deps = {}) {
   if (!wwpanelConfigured(config)) {
     return { ok: false, reason: 'not_configured' };
   }
-  if (!config?.wwpanelWritesEnabled) {
+  if (!config?.wwpanelWritesEnabled || !config?.wwpanelTestsEnabled) {
     return { ok: false, reason: 'writes_disabled' };
   }
 
@@ -159,6 +159,7 @@ export function extractMac(value) {
 export async function activateWplayApp(config, input = {}, deps = {}) {
   if (!wwpanelConfigured(config)) return { ok: false, reason: 'not_configured' };
   if (!config?.wwpanelWritesEnabled) return { ok: false, reason: 'writes_disabled' };
+  if (!config?.wwpanelAppActivationEnabled) return { ok: false, reason: 'writes_disabled' };
   const mac = input.mac ? (extractMac(input.mac) || String(input.mac).trim()) : null;
   const match = input.nameApp ? { app: input.nameApp, kind: WWPANEL_XSTREAM_APPS.includes(input.nameApp) ? 'xstream' : 'common' } : matchPanelApp(input.appText);
   if (!mac || !match || input.id_user === undefined || input.id_user === null) {

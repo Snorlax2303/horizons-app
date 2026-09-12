@@ -32,6 +32,7 @@ import { registerRenewalListRoutes } from './routes/renewalList.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerWplayRoutes } from './routes/wplay.js';
 import { resolveBotInstall, createWplayTrial, activateWplayApp, wplayBotStatus } from './wplayBotFlow.js';
+import { linkWplayLine, recordAppActivation, resolveWplayLine } from './wplayLink.js';
 import { WWPANEL_APPS } from './wplayCatalog.js';
 import { runTelegramCommand, parseTelegramCommand } from './telegramCommands.js';
 import { sendTelegramMessage } from './telegramDigest.js';
@@ -2148,10 +2149,12 @@ app.post('/typebot/wplay/trials', async (request, response) => {
     nameApp: z.enum(WWPANEL_APPS).optional(),
     namePlaylist: z.string().trim().max(120).optional(),
     name: z.string().trim().max(120).optional(),
+    customerId: z.string().trim().max(64).optional(),
   }).safeParse(request.body ?? {});
   if (!parsed.success) return response.status(400).json({ error: 'Pedido de teste inválido.', details: parsed.error.flatten() });
   try {
-    const result = await createWplayTrial(config, parsed.data);
+    const { customerId, ...trialInput } = parsed.data;
+    const result = await createWplayTrial(config, trialInput);
     if (!result.ok) {
       const status = result.reason === 'not_configured' || result.reason === 'writes_disabled' ? 503 : 400;
       const message = result.reason === 'writes_disabled'
@@ -2160,6 +2163,13 @@ app.post('/typebot/wplay/trials', async (request, response) => {
           ? 'Teste automático indisponível agora; um atendente continua o pedido.'
           : 'Não foi possível montar o teste com os dados recebidos.';
       return response.status(status).json({ error: message, reason: result.reason });
+    }
+    if (customerId && result.trial?.lineId) {
+      const link = await linkWplayLine(supabase, {
+        userId: config.horizonsOwnerUserId ?? null, customerId,
+        lineId: result.trial.lineId, username: result.trial.username, kind: 'test',
+      });
+      return response.status(201).json({ ...result, link });
     }
     return response.status(201).json(result);
   } catch (error) {
@@ -2175,11 +2185,18 @@ app.post('/typebot/wplay/app', async (request, response) => {
     appText: z.string().trim().max(60).optional(),
     mac: z.string().trim().min(1).max(64),
     namePlaylist: z.string().trim().max(120).optional(),
-    id_user: z.union([z.string().trim().max(64), z.number().int()]),
+    id_user: z.union([z.string().trim().max(64), z.number().int()]).optional(),
+    customerId: z.string().trim().max(64).optional(),
   }).safeParse(request.body ?? {});
   if (!parsed.success) return response.status(400).json({ error: 'Pedido de ativação inválido.', details: parsed.error.flatten() });
   try {
-    const result = await activateWplayApp(config, parsed.data);
+    let { id_user: idUser, customerId } = parsed.data;
+    let targetId = null;
+    if ((idUser === undefined || idUser === null) && customerId) {
+      const resolved = await resolveWplayLine(supabase, { userId: config.horizonsOwnerUserId ?? null, customerId });
+      if (resolved) { idUser = resolved.lineId; targetId = resolved.targetId; }
+    }
+    const result = await activateWplayApp(config, { ...parsed.data, id_user: idUser });
     if (!result.ok) {
       const message = result.reason === 'app_requires_login'
         ? 'Esse aplicativo entra com usuário e senha, não por MAC; um atendente vai concluir.'
@@ -2187,6 +2204,12 @@ app.post('/typebot/wplay/app', async (request, response) => {
           ? 'Não reconheci o aplicativo ou o MAC; um atendente vai continuar.'
           : 'Não foi possível ativar o aplicativo agora; um atendente vai continuar.';
       return response.status(result.reason === 'missing_fields' ? 400 : 503).json({ error: message, reason: result.reason });
+    }
+    if (customerId) {
+      result.recorded = await recordAppActivation(supabase, {
+        userId: config.horizonsOwnerUserId ?? null, customerId, targetId,
+        mac: parsed.data.mac, nameApp: result.app,
+      });
     }
     return response.json(result);
   } catch (error) {

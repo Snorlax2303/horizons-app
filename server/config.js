@@ -52,6 +52,7 @@ export function getConfig() {
     wwpanelCustomersEnabled: process.env.WWPANEL_CUSTOMERS_ENABLED === 'true',
     wwpanelRenewalsEnabled: process.env.WWPANEL_RENEWALS_ENABLED === 'true',
     wwpanelAppActivationEnabled: process.env.WWPANEL_APP_ACTIVATION_ENABLED === 'true',
+    wwpanelPaymentWindowDays: Number(process.env.WWPANEL_PAYMENT_WINDOW_DAYS || 14) || 14,
     minimaxApiKey: process.env.MINIMAX_API_KEY,
     minimaxApiUrl: process.env.MINIMAX_API_URL || 'https://api.minimax.io/v1/chat/completions',
     minimaxPrimaryModel: process.env.MINIMAX_PRIMARY_MODEL || 'MiniMax-M2.7',

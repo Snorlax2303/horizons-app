@@ -1,5 +1,6 @@
 import { createWwpanelClient, wwpanelConfigured } from '../wplayPanel.js';
 import { fetchWplayLinks, resolveInstall, WPLAY_INSTALL_PRODUCTS } from '../wplayInstall.js';
+import { assertCustomerPaid, extractLineId, extractLineUsername, linkWplayLine, recordAppActivation, resolveCustomerByLine, resolveWplayLine } from '../wplayLink.js';
 import {
   WWPANEL_PLANS,
   WWPANEL_ADDONS,
@@ -97,6 +98,28 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
     return clientFactory(config);
   }
 
+  // Opção B — nunca criar/renovar cliente pago no painel sem pagamento validado.
+  // Aceita customerId explícito ou resolve o cliente pelo vínculo da linha
+  // (external_line_id / external_customer_id = id da rota).
+  async function paymentGate(request, response, { customerId, lineId }) {
+    let targetId = customerId || null;
+    if (!targetId && lineId) {
+      const found = await resolveCustomerByLine(supabase, String(lineId));
+      targetId = found?.customer_id || null;
+    }
+    const check = await assertCustomerPaid(supabase, {
+      userId: request.horizonsUser?.id ?? null,
+      customerId: targetId,
+      windowDays: Number(config?.wwpanelPaymentWindowDays) > 0 ? Number(config.wwpanelPaymentWindowDays) : 14,
+    });
+    if (!check.ok) {
+      await audit(request, 'payment_gate_blocked', { status: 'blocked', summary: { customerId: targetId || undefined, lineId: lineId || undefined, reason: check.reason } });
+      response.status(check.status).json({ error: check.error, reason: check.reason });
+      return null;
+    }
+    return { customerId: targetId, via: check.via };
+  }
+
   app.get('/wplay/status', requireAuthenticatedUser, (_request, response) => {
     return response.json({
       configured: wwpanelConfigured(config),
@@ -180,10 +203,11 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
       country: z.string().trim().max(4).optional(),
       mac: z.string().trim().max(64).optional(),
       testDuration: durationHours.optional(),
+      customerId: z.string().trim().max(64).optional(),
     }).safeParse(request.body ?? {});
     if (!parsed.success) return response.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() });
 
-    const { product: requestedProduct, ...payload } = parsed.data;
+    const { product: requestedProduct, customerId, ...payload } = parsed.data;
     const product = resolveTestProduct(requestedProduct, payload);
     if (product === 'krator' && !payload.package_krator) {
       return response.status(400).json({ error: 'Informe package_krator para teste Krator+.', details: { package_krator: 'obrigatório' } });
@@ -200,7 +224,14 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
       if (product === 'krator') result = await client().createKratorTest(input);
       else if (product === 'nexus') result = await client().createNexusTest(input);
       else result = await client().createTest(input);
-      await audit(request, 'create_test', { status: 'completed', summary: { product, ...payload } });
+      await audit(request, 'create_test', { status: 'completed', summary: { product, customerId: customerId || undefined, ...payload } });
+      if (customerId) {
+        const link = await linkWplayLine(supabase, {
+          userId: request.horizonsUser?.id ?? null, customerId,
+          lineId: extractLineId(result), username: extractLineUsername(result), kind: 'test',
+        });
+        return response.status(201).json({ operation: 'create_test', product, result, link });
+      }
       return response.status(201).json({ operation: 'create_test', product, result });
     } catch (error) {
       await audit(request, 'create_test', { status: 'failed', summary: { product, message: error.message, statusCode: error.statusCode } });
@@ -217,12 +248,30 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
       mac: text(64)(z).optional(),
       namePlaylist: z.string().trim().max(120).optional(),
       id_user: z.union([z.string().trim().max(64), z.number().int()]).optional(),
+      customerId: z.string().trim().max(64).optional(),
     }).safeParse(request.body ?? {});
     if (!parsed.success) return response.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() });
     try {
-      const result = await client().activateApp(parsed.data);
-      await audit(request, 'activate_app', { status: 'completed', summary: parsed.data });
-      return response.status(200).json({ operation: 'activate_app', result });
+      let { id_user: idUser, customerId, ...panelPayload } = parsed.data;
+      let targetId = null;
+      if (!idUser && customerId) {
+        const resolved = await resolveWplayLine(supabase, { userId: request.horizonsUser?.id ?? null, customerId });
+        idUser = resolved?.lineId ?? null;
+        targetId = resolved?.targetId ?? null;
+      }
+      if (!idUser) {
+        return response.status(400).json({ error: 'Informe id_user ou um customerId do Horizons com linha WPlay vinculada.', reason: 'missing_id_user' });
+      }
+      const result = await client().activateApp({ ...panelPayload, id_user: idUser });
+      await audit(request, 'activate_app', { status: 'completed', summary: { ...panelPayload, id_user: idUser } });
+      let recorded = null;
+      if (customerId) {
+        recorded = await recordAppActivation(supabase, {
+          userId: request.horizonsUser?.id ?? null, customerId, targetId,
+          mac: parsed.data.mac, nameApp: parsed.data.nameApp,
+        });
+      }
+      return response.status(200).json({ operation: 'activate_app', result, recorded });
     } catch (error) {
       await audit(request, 'activate_app', { status: 'failed', summary: { message: error.message, statusCode: error.statusCode } });
       return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });
@@ -238,11 +287,18 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
       email: z.string().trim().max(160).optional(),
       password: z.string().trim().max(160).optional(),
       id_user: z.union([z.string().trim().max(64), z.number().int()]).optional(),
+      customerId: z.string().trim().max(64).optional(),
     }).safeParse(request.body ?? {});
     if (!parsed.success) return response.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() });
     try {
-      const result = await client().activateAppXstream(parsed.data);
-      await audit(request, 'activate_app_xstream', { status: 'completed', summary: { nameApp: parsed.data.nameApp, id_user: parsed.data.id_user } });
+      const { customerId, ...panelPayload } = parsed.data;
+      let idUser = panelPayload.id_user;
+      if (!idUser && customerId) {
+        const resolved = await resolveWplayLine(supabase, { userId: request.horizonsUser?.id ?? null, customerId });
+        idUser = resolved?.lineId ?? null;
+      }
+      const result = await client().activateAppXstream({ ...panelPayload, id_user: idUser ?? undefined });
+      await audit(request, 'activate_app_xstream', { status: 'completed', summary: { nameApp: parsed.data.nameApp, id_user: idUser } });
       return response.status(200).json({ operation: 'activate_app_xstream', result });
     } catch (error) {
       await audit(request, 'activate_app_xstream', { status: 'failed', summary: { message: error.message, statusCode: error.statusCode } });
@@ -266,12 +322,27 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
       package_krator: z.string().trim().max(64).optional(),
       package_nexus: z.number().int().optional(),
       deviceKey: z.string().trim().max(120).optional(),
+      customerId: z.string().trim().max(64).optional(),
     }).safeParse(request.body ?? {});
     if (!parsed.success) return response.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() });
+    const { customerId, isTrial, ...panelPayload } = parsed.data;
+    const trial = isTrial !== 0;
+    if (!trial) {
+      const gate = await paymentGate(request, response, { customerId });
+      if (!gate) return undefined;
+    }
     try {
-      const result = await client().createCustomer({ isTrial: 1, ...parsed.data });
-      await audit(request, 'create_customer', { status: 'completed', summary: parsed.data });
-      return response.status(201).json({ operation: 'create_customer', result });
+      const result = await client().createCustomer({ isTrial: trial ? 1 : 0, ...panelPayload });
+      await audit(request, 'create_customer', { status: 'completed', summary: { ...panelPayload, trial } });
+      let link = null;
+      if (customerId) {
+        link = await linkWplayLine(supabase, {
+          userId: request.horizonsUser?.id ?? null, customerId,
+          lineId: extractLineId(result), username: extractLineUsername(result),
+          kind: trial ? 'test' : 'production',
+        });
+      }
+      return response.status(201).json({ operation: 'create_customer', result, link });
     } catch (error) {
       await audit(request, 'create_customer', { status: 'failed', summary: { message: error.message, statusCode: error.statusCode } });
       return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });
@@ -282,12 +353,19 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
   app.patch('/wplay/customers/:id/extend', requireAuthenticatedUser, async (request, response) => {
     if (writesDisabled(response)) return undefined;
     if (operationDisabled('renewal', response)) return undefined;
-    const parsed = z.object({ days: z.number().int().min(1).max(3650), months: z.number().int().min(1).max(120).optional(), notes: z.string().trim().max(500).optional() }).safeParse(request.body ?? {});
+    const parsed = z.object({ days: z.number().int().min(1).max(3650), months: z.number().int().min(1).max(120).optional(), notes: z.string().trim().max(500).optional(), customerId: z.string().trim().max(64).optional() }).safeParse(request.body ?? {});
     if (!parsed.success) return response.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() });
+    const { customerId, ...renewPayload } = parsed.data;
+    const gate = await paymentGate(request, response, { customerId, lineId: request.params.id });
+    if (!gate) return undefined;
     try {
-      const result = await client().extend(request.params.id, parsed.data);
-      await audit(request, 'extend_customer', { targetId: request.params.id, status: 'completed', summary: parsed.data });
-      return response.status(200).json({ operation: 'extend_customer', result });
+      const result = await client().extend(request.params.id, renewPayload);
+      await audit(request, 'extend_customer', { targetId: request.params.id, status: 'completed', summary: renewPayload });
+      let link = null;
+      if (customerId) {
+        link = await linkWplayLine(supabase, { userId: request.horizonsUser?.id ?? null, customerId, lineId: request.params.id, kind: 'production' });
+      }
+      return response.status(200).json({ operation: 'extend_customer', result, link });
     } catch (error) {
       await audit(request, 'extend_customer', { targetId: request.params.id, status: 'failed', summary: { message: error.message, statusCode: error.statusCode } });
       return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });
@@ -297,10 +375,19 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
   app.patch('/wplay/customers/:id/add-48h', requireAuthenticatedUser, async (request, response) => {
     if (writesDisabled(response)) return undefined;
     if (operationDisabled('renewal', response)) return undefined;
+    const parsed = z.object({ customerId: z.string().trim().max(64).optional() }).safeParse(request.body ?? {});
+    if (!parsed.success) return response.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() });
+    const { customerId } = parsed.data;
+    const gate = await paymentGate(request, response, { customerId, lineId: request.params.id });
+    if (!gate) return undefined;
     try {
       const result = await client().add48h(request.params.id);
       await audit(request, 'add_48h', { targetId: request.params.id, status: 'completed', summary: {} });
-      return response.status(200).json({ operation: 'add_48h', result });
+      let link = null;
+      if (customerId) {
+        link = await linkWplayLine(supabase, { userId: request.horizonsUser?.id ?? null, customerId, lineId: request.params.id, kind: 'production' });
+      }
+      return response.status(200).json({ operation: 'add_48h', result, link });
     } catch (error) {
       await audit(request, 'add_48h', { targetId: request.params.id, status: 'failed', summary: { message: error.message, statusCode: error.statusCode } });
       return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });
@@ -316,12 +403,20 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
       package_p2p: z.string().trim().max(64).optional(),
       package_krator: z.string().trim().max(64).optional(),
       package_nexus: z.number().int().optional(),
+      customerId: z.string().trim().max(64).optional(),
     }).safeParse(request.body ?? {});
     if (!parsed.success) return response.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() });
+    const { customerId, ...planPayload } = parsed.data;
+    const gate = await paymentGate(request, response, { customerId, lineId: request.params.id });
+    if (!gate) return undefined;
     try {
-      const result = await client().managePlan(request.params.id, parsed.data);
-      await audit(request, 'manage_plan', { targetId: request.params.id, status: 'completed', summary: parsed.data });
-      return response.status(200).json({ operation: 'manage_plan', result });
+      const result = await client().managePlan(request.params.id, planPayload);
+      await audit(request, 'manage_plan', { targetId: request.params.id, status: 'completed', summary: planPayload });
+      let link = null;
+      if (customerId) {
+        link = await linkWplayLine(supabase, { userId: request.horizonsUser?.id ?? null, customerId, lineId: request.params.id, kind: 'production' });
+      }
+      return response.status(200).json({ operation: 'manage_plan', result, link });
     } catch (error) {
       await audit(request, 'manage_plan', { targetId: request.params.id, status: 'failed', summary: { message: error.message, statusCode: error.statusCode } });
       return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });
@@ -331,12 +426,19 @@ export function registerWplayRoutes(app, { supabase, requireAuthenticatedUser, c
   app.post('/wplay/customers/:id/activate', requireAuthenticatedUser, async (request, response) => {
     if (writesDisabled(response)) return undefined;
     if (operationDisabled('customer', response)) return undefined;
-    const parsed = z.object({ planId: z.number().int().optional(), package_iptv: z.number().int().optional(), package_p2p: z.string().trim().max(64).optional(), notes: z.string().trim().max(500).optional() }).safeParse(request.body ?? {});
+    const parsed = z.object({ planId: z.number().int().optional(), package_iptv: z.number().int().optional(), package_p2p: z.string().trim().max(64).optional(), notes: z.string().trim().max(500).optional(), customerId: z.string().trim().max(64).optional() }).safeParse(request.body ?? {});
     if (!parsed.success) return response.status(400).json({ error: 'Dados inválidos.', details: parsed.error.flatten() });
+    const { customerId, ...activatePayload } = parsed.data;
+    const gate = await paymentGate(request, response, { customerId, lineId: request.params.id });
+    if (!gate) return undefined;
     try {
-      const result = await client().activateTrial(request.params.id, parsed.data);
-      await audit(request, 'activate_customer', { targetId: request.params.id, status: 'completed', summary: parsed.data });
-      return response.status(200).json({ operation: 'activate_customer', result });
+      const result = await client().activateTrial(request.params.id, activatePayload);
+      await audit(request, 'activate_customer', { targetId: request.params.id, status: 'completed', summary: activatePayload });
+      let link = null;
+      if (customerId) {
+        link = await linkWplayLine(supabase, { userId: request.horizonsUser?.id ?? null, customerId, lineId: request.params.id, kind: 'production' });
+      }
+      return response.status(200).json({ operation: 'activate_customer', result, link });
     } catch (error) {
       await audit(request, 'activate_customer', { targetId: request.params.id, status: 'failed', summary: { message: error.message, statusCode: error.statusCode } });
       return response.status(error.statusCode && error.statusCode < 500 ? 400 : 502).json({ error: error.message });

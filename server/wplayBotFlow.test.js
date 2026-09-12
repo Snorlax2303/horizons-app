@@ -28,7 +28,7 @@ function clientSpy(calls, extra = {}) {
   };
 }
 
-const ON = { wwpanelApiUrl: 'https://painel.test', wwpanelApiKey: 'k', wwpanelWritesEnabled: true };
+const ON = { wwpanelApiUrl: 'https://painel.test', wwpanelApiKey: 'k', wwpanelWritesEnabled: true, wwpanelTestsEnabled: true, wwpanelAppActivationEnabled: true };
 const OFF = { wwpanelApiUrl: 'https://painel.test', wwpanelApiKey: 'k', wwpanelWritesEnabled: false };
 
 test('status informa configuração e gate', () => {
