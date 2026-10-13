@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { aiIsConfigured, chatJson } from './llm.js';
 
 export const supportInterpretationSchema = z.object({
   intent: z.enum(['trial', 'purchase', 'renewal', 'credentials', 'support', 'finance', 'human', 'unknown']),
@@ -26,36 +27,19 @@ Quando faltar informação essencial ou houver ambiguidade, use needs_clarificat
 Quando estiver claro, reply deve confirmar brevemente o entendimento, sem prometer resultado.
 Schema: {"intent":"...","route":"...","device_category":null,"manufacturer":null,"confidence":0.0,"needs_clarification":false,"reply":"..."}`;
 
-function parseJsonObject(content) {
-  if (typeof content !== 'string') throw new Error('MiniMax não retornou texto.');
-  const cleaned = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-  const start = cleaned.indexOf('{');
-  const end = cleaned.lastIndexOf('}');
-  if (start < 0 || end <= start) throw new Error('MiniMax não retornou JSON.');
-  return JSON.parse(cleaned.slice(start, end + 1));
+export function supportAiIsConfigured(ai) {
+  return aiIsConfigured(ai, 'fast');
 }
 
-export function minimaxSupportIsConfigured(config) {
-  return Boolean(config.minimaxApiKey && config.minimaxApiUrl && config.minimaxPrimaryModel);
-}
-
-export async function interpretSupportMessage(config, message, options = {}) {
-  if (!minimaxSupportIsConfigured(config)) throw new Error('MiniMax não configurada.');
+// Retorna a interpretação validada; `withMeta` devolve também modelo e fallback.
+export async function interpretSupportMessage(ai, message, options = {}) {
+  if (!supportAiIsConfigured(ai)) throw new Error('IA (OmniRoute) não configurada.');
   const normalized = String(message || '').trim();
   if (!normalized || normalized.length > 1200) throw new Error('Mensagem de atendimento inválida.');
-  const fetchImpl = options.fetchImpl || globalThis.fetch;
-  const response = await fetchImpl(config.minimaxApiUrl, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${config.minimaxApiKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: config.minimaxPrimaryModel,
-      messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: normalized }],
-      max_completion_tokens: Math.min(config.minimaxMaxCompletionTokens, 800),
-      temperature: config.minimaxTemperature,
-    }),
-    signal: AbortSignal.timeout(config.minimaxTimeoutMs),
+  const result = await chatJson(ai, {
+    profile: 'fast', maxTokens: 800, fetchImpl: options.fetchImpl,
+    messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: normalized }],
+    parse: (json) => supportInterpretationSchema.parse(json),
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`MiniMax respondeu ${response.status}.`);
-  return supportInterpretationSchema.parse(parseJsonObject(payload.choices?.[0]?.message?.content));
+  return options.withMeta ? result : result.value;
 }

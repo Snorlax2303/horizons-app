@@ -5,6 +5,68 @@
 
 ## Última revisão
 
+- Data/hora: 2026-10-13 — Fase 0 (contenção) + módulo de IA OmniRoute publicados (autorizado pelo dono: "confirmo pode seguir")
+- **Segurança**: rotas `/wplay/*` agora exigem o proprietário (`createRequireOwnerUser` em `server/auth.js`); cadastro público do Supabase desligado via Management API (`disable_signup=true`, conferido em `/auth/v1/settings`); rota `/register` redireciona para `/login` e o link "Criar conta" saiu do login. Corrigido bug latente: `requireAuthenticatedUser` (const) era usado antes de declarado em `server/api.js` — o próximo build teria quebrado na subida.
+- **IA via OmniRoute**: `server/llm.js` (cliente OpenAI-compatível com cadeia de fallback), `server/aiSettings.js` (chave cifrada AES-GCM em `integration_settings`, cache 30 s, painel > `.env`), rotas `GET/PUT /settings/ai` e `POST /settings/ai/test` (somente proprietário). `minimaxAdmin/minimaxSupport` viraram `aiAdmin/aiSupport` (perfis `smart`/`fast`); `receiptExtractor` usa o perfil `vision`. Variáveis `MINIMAX_*`/`RECEIPT_AI_*` não são mais lidas (continuam no `.env`, sem efeito). Tela: card "Inteligência Artificial (OmniRoute)" em `/configuracoes` (substitui o card Groq legado).
+- **Migration** `20261013120000_integration_settings.sql` aplicada (RLS ligado, sem grants para anon/authenticated).
+- **n8n**: workflow `Horizons | Envio de lembretes financeiros | v1` desativado (backup `/root/n8n/.tRtpDjTu1GNkL8Za-before-deactivate-*.json`).
+- Backups `.env.bak-*`/`docker-compose.vps.yml.bak-*` movidos para `/root/horizons-backups/`; `.gitignore` cobre `*.bak*`.
+- Verificação: 117/117 testes, lint limpo, build ok; smoke do container novo (health 200, rotas protegidas 401); `api` e `frontend` recriados — health 200, front 200, API alcança o OmniRoute (401 sem chave). `worker` não foi reiniciado.
+- **Pendente**: dono salvar a chave do OmniRoute e escolher os modelos em `/configuracoes`; depois validar `/typebot/ai/interpret`, assistente e um comprovante real. 4 contas não proprietárias confirmadas continuam existindo no Supabase (não removidas).
+
+- Data/hora: 2026-10-13 — auditoria somente leitura (nenhum serviço, dado, flag ou integração alterado)
+- Verificação: `npm run test:server` 103/103, `npm run lint` limpo. Containers `api`/`worker`/`frontend`/`redis` up há 4 semanas; API e frontend HTTP 200. `npm audit --omit=dev`: 10 vulnerabilidades (1 crítica `proxy-addr`, 6 altas — maioria toolchain de build).
+- **Crítico — gasto de crédito por qualquer conta**: o Supabase está com cadastro público ligado (`disable_signup=false`, confirmação por e-mail) e a rota `/register` é pública; `POST /wplay/tests` exige só `requireAuthenticatedUser` (sem checagem de proprietário) e o `.env` tem `WWPANEL_WRITES_ENABLED=true` + `WWPANEL_TESTS_ENABLED=true`. Qualquer pessoa que crie e confirme uma conta pode criar testes no painel WPlay.
+- **WhatsApp de entrada parado**: instância Evolution `Meu numero` está `close` desde 2026-10-06 14:36 UTC; `lead_events` parou no mesmo minuto (era ~500/dia). Instância `Financeiro` está `close` desde 2026-08-26. Só `Horizons Typebot` está `open` (webhook → n8n).
+- **Comprovantes nunca extraídos**: `pix_receipts` tem 4287 registros (18–25/08), 100% `extraction_status=failed`; 155 `renewal_requests` em `awaiting_bank_review` desde 2026-08-18 sem revisão.
+- **Workflow n8n de lembretes quebrado**: `Horizons | Envio de lembretes financeiros | v1` (ativo) chama `GET /billing/reminders/sendable` com a credencial da ponte do bot, mas a rota exige Bearer de usuário Supabase → 401 a cada execução (327 erros em 14 dias). 167 lembretes `planned`, nenhum aprovado/enviado.
+- **Observabilidade do bot perdida**: o n8n poda execuções em 10.000 e o workflow de Afiliados gera ~700/dia; o histórico do `Atendimento WhatsApp completo` foi todo descartado.
+- `panel_operations`: 69 `failed` × 13 `completed` (falhas de seletor nos fluxos homologados de Unix/Union, julho–agosto).
+- Git: 4 commits à frente de `origin/main`; `server/auth.js` está **não rastreado**, mas `server/api.js` (modificado) já o importa — um build a partir do Git quebraria.
+- **Plano aprovado para detalhamento**: `docs/plano-correcoes-e-melhorias.md` (Fases 0–4). Decisão do dono: MiniMax/Qwen descontinuados; toda IA (leitura de comprovantes, interpretação do bot, assistente) passa pelo OmniRoute (`127.0.0.1:20129/v1`, modelos ChatGPT/Claude). O WhatsApp será reconectado pelo dono.
+- Próximo passo recomendado: (1) desligar `WWPANEL_TESTS_ENABLED` ou exigir `requireHorizonsOwner` nas rotas `/wplay/*` e desligar signup público; (2) reconectar `Meu numero`/`Financeiro`; (3) corrigir a autenticação do workflow de lembretes; (4) investigar a falha de extração MiniMax.
+
+- Data/hora: 2026-09-24 — autenticação extraída para middleware reutilizável
+- `server/auth.js` agora cria o middleware de autenticação Supabase; `server/api.js` o injeta sem alterar o contrato de Bearer token, erros 401 ou `request.horizonsUser`. Testes focados cobrem token ausente, válido e inválido/expirado.
+- Verificação: `node --test server/auth.test.js` passou (3/3), `npm run test:server` passou (103/103), `npm run lint` e `git diff --check` passaram. Nenhum deploy, serviço, dado ou integração externa foi alterado.
+
+- Data/hora: 2026-09-21 — retomada do SaaS e validação da base
+- Worktree preservado: as alterações locais em `docker-compose.vps.yml` conectam `api` e
+  `worker` à rede externa `shared-net`; os backups `.env.bak-20260913-evolution-network` e
+  `docker-compose.vps.yml.bak-20260913-evolution-network` continuam sem alteração.
+- Verificação local concluída: `npm run test:server` passou com **100/100**, `npm run lint`
+  passou e `npm run build` gerou o frontend sem erros.
+- Serviços ativos e saudáveis: API em `127.0.0.1:8081` e frontend em `127.0.0.1:3100`
+  responderam HTTP 200; Redis está healthy e worker está em execução.
+- Nenhuma operação externa, mensagem, criação de acesso, cobrança ou alteração de crédito foi
+  executada nesta retomada. Próximo passo funcional permanece a decisão do fluxo WPlay para um
+  número sem linha/trial existente ou a evolução de outra área do SaaS.
+
+- Data/hora: 2026-09-14 — validação de leitura do Warez/WPlay e preparação do Rushplay
+- **Warez/WPlay validado sem escrita**: API configurada em `https://mcapi.knewcms.com:2087`,
+  `GET /panel-links` retornou 15 itens e `GET /lines/wapp/services` respondeu com sucesso.
+  Nenhum teste, cliente, renovação, ativação ou mensagem foi executado.
+- As flags específicas continuam seguras: criação de clientes, renovação e ativação de app
+  estão desligadas; testes permanecem liberados conforme a configuração atual. O próximo teste
+  real exige o telefone de um beneficiário sem linha/trial existente e confirmação da operação.
+- **Rushplay ainda não incorporado**: não há URL base, documentação de API, método de
+  autenticação nem chave fornecidos no projeto. A busca pública encontrou apenas páginas
+  comerciais, sem contrato verificável; não vou deduzir endpoints nem reutilizar a chave do
+  Warez/WPlay. Próximo passo: receber esses dados e validar primeiro uma rota `GET`.
+- Testes locais: **100/100 aprovados** (`npm run test:server`).
+
+- Data/hora: 2026-09-14 — correção de menus duplicados no bot n8n
+- **Correção publicada** no workflow ativo `Horizons | Atendimento WhatsApp completo | v1` (44 nós): o nó `Decidir etapa` agora mantém a deduplicação por `messageId` e adiciona deduplicação por telefone + conteúdo por 10 segundos. Isso cobre eventos repetidos da Evolution que chegam com IDs diferentes ou sem ID e causavam vários menus fora de ordem.
+- Backup criado antes da alteração em `/root/n8n/.horizons-whatsapp-completo-before-menu-dedupe-20260914-141806.json`. Verificação pós-publicação confirmou `active=true`, 44 nós, conexões apontando para destinos existentes e as duas camadas de deduplicação presentes. Nenhum webhook foi disparado nesta correção.
+- **Próximo passo**: observar o próximo atendimento real; se ainda houver mensagens fora de ordem com conteúdos diferentes, investigar concorrência/latência da Evolution e serializar a sessão por telefone.
+
+- Data/hora: 2026-09-14 — retomada após configuração do número de vendas
+- **Diagnóstico somente leitura**: a instância Evolution `Horizons Typebot` está conectada (`open`); a configuração local aponta `EVOLUTION_SALES_INSTANCE` para ela e o telefone de vendas está configurado. API e n8n responderam HTTP 200.
+- **Divergência operacional importante**: o `.env` atual tem `WWPANEL_WRITES_ENABLED=true` e `WWPANEL_TESTS_ENABLED=true`, enquanto o handoff anterior registrava as escritas desligadas. Nenhuma operação WPlay foi executada nesta rodada; antes do teste de campo, confirmar se essa liberação é intencional.
+- O carregamento do `.env` por `source` produz erro na linha `EVOLUTION_SALES_INSTANCE=Horizons Typebot` por causa do espaço no valor; o parser do Docker Compose continua válido (`config -q` passou). Não foi alterado nesta rodada.
+- **Homologação autorizada, 2026-09-14**: o webhook do n8n aceitou a jornada para o número informado, mas a proteção de identidade encontrou uma linha WPlay de **produção ativa** já vinculada (`id` 105395079); por isso nenhum novo trial foi criado e nenhum crédito adicional foi consumido. O envio final de credenciais de trial não ocorreu.
+- **Próximo passo**: decidir se o teste deve usar outro número sem acesso existente ou se o teste deve ser feito sobre a linha já cadastrada; não forçar um segundo trial para o mesmo WhatsApp sem essa decisão.
+
 - Data/hora: 2026-09-10 — correção do catálogo de apps e descoberta do catálogo de instalação do painel
 - **Erro corrigido**: `WWPANEL_APPS`/`WWPANEL_XSTREAM_APPS` em `server/wplayCatalog.js` tinham
   uma lista **inventada** (`Wapp`, `WTV Player`, ...). A lista real (extraída do bundle oficial

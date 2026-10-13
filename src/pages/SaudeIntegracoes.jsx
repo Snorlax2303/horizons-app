@@ -4,7 +4,7 @@ import Button from '@/components/Common/Button';
 import { horizonsApi } from '@/services/horizonsApi';
 import { useToast } from '@/hooks/useToast';
 
-const labels = { evolution: 'Evolution / WhatsApp', telegram: 'Telegram', minimax: 'MiniMax IA', paggpay: 'PaggPay', efi: 'Efí' };
+const labels = { evolution: 'Evolution / WhatsApp', telegram: 'Telegram', ai: 'IA (OmniRoute)', paggpay: 'PaggPay', efi: 'Efí' };
 
 export default function SaudeIntegracoes() {
   const { error } = useToast();

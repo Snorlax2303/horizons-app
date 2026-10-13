@@ -1,11 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { interpretSupportMessage } from './minimaxSupport.js';
+import { interpretSupportMessage } from './aiSupport.js';
 
 const config = {
-  minimaxApiKey: 'test-key', minimaxApiUrl: 'https://api.minimax.test/v1/chat/completions',
-  minimaxPrimaryModel: 'MiniMax-M2.7', minimaxMaxCompletionTokens: 1200,
-  minimaxTemperature: 0.2, minimaxTimeoutMs: 1000,
+  baseUrl: 'https://omniroute.test/v1', apiKey: 'test-key-123456',
+  models: { fast: 'claude/haiku' }, fallbackModels: [], timeoutMs: 1000,
 };
 const response = (content) => new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
   status: 200, headers: { 'content-type': 'application/json' },

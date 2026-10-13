@@ -1,16 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { interpretAdminIntent } from './minimaxAdmin.js';
+import { interpretAdminIntent } from './aiAdmin.js';
 
 const config = {
-  minimaxApiKey: 'test-key',
-  minimaxApiUrl: 'https://api.minimax.test/v1/chat/completions',
-  minimaxPrimaryModel: 'MiniMax-M2.7',
-  minimaxFallbackEnabled: true,
-  minimaxFallbackModel: 'MiniMax-M3',
-  minimaxMaxCompletionTokens: 1200,
-  minimaxTemperature: 0.2,
-  minimaxTimeoutMs: 1000,
+  baseUrl: 'https://omniroute.test/v1',
+  apiKey: 'test-key-123456',
+  models: { fast: 'claude/haiku', smart: 'claude/sonnet', vision: 'claude/sonnet' },
+  fallbackModels: ['codex/gpt-5'],
+  timeoutMs: 1000,
 };
 
 const response = (content, status = 200) => new Response(JSON.stringify({
@@ -24,30 +21,30 @@ test('interprets a valid read-only administrative request', async () => {
       needs_clarification: false, clarification_question: null,
     })),
   });
-  assert.equal(result.model, 'MiniMax-M2.7');
+  assert.equal(result.model, 'claude/sonnet');
   assert.equal(result.fallback_used, false);
   assert.equal(result.intent.tool, 'get_business_metrics');
 });
 
-test('uses M3 only when primary output is invalid', async () => {
+test('uses the fallback model only when primary output is invalid', async () => {
   const models = [];
   const result = await interpretAdminIntent(config, 'Localize o cliente Rafael', {
     fetchImpl: async (_url, options) => {
       const model = JSON.parse(options.body).model;
       models.push(model);
-      if (model === 'MiniMax-M2.7') return response('resposta inválida');
+      if (model === 'claude/sonnet') return response('resposta inválida');
       return response(JSON.stringify({
         tool: 'find_customer', arguments: { query: 'Rafael' }, confidence: 0.9,
         needs_clarification: false, clarification_question: null,
       }));
     },
   });
-  assert.deepEqual(models, ['MiniMax-M2.7', 'MiniMax-M3']);
+  assert.deepEqual(models, ['claude/sonnet', 'codex/gpt-5']);
   assert.equal(result.fallback_used, true);
 });
 
 test('rejects unsupported write-capable tool names', async () => {
-  await assert.rejects(() => interpretAdminIntent({ ...config, minimaxFallbackEnabled: false }, 'Renove o cliente', {
+  await assert.rejects(() => interpretAdminIntent({ ...config, fallbackModels: [] }, 'Renove o cliente', {
     fetchImpl: async () => response(JSON.stringify({
       tool: 'renew_customer', arguments: {}, confidence: 1,
       needs_clarification: false, clarification_question: null,
@@ -67,7 +64,7 @@ test('accepts an exact WhatsApp draft for later confirmation', async () => {
 });
 
 test('rejects a write request without all confirmation fields', async () => {
-  await assert.rejects(() => interpretAdminIntent({ ...config, minimaxFallbackEnabled: false }, 'Envie uma mensagem', {
+  await assert.rejects(() => interpretAdminIntent({ ...config, fallbackModels: [] }, 'Envie uma mensagem', {
     fetchImpl: async () => response(JSON.stringify({
       tool: 'send_whatsapp', arguments: { phone: '5516999999999' }, confidence: 0.99,
       needs_clarification: false, clarification_question: null,

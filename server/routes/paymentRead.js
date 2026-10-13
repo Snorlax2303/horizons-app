@@ -1,6 +1,7 @@
-export function registerPaymentReadRoutes(app, { supabase, config, requireAuthenticatedUser, efiIsConfigured, receiptExtractorIsConfigured, receiptExtractorModel }) {
-  app.get('/integrations/receipt-extractor', requireAuthenticatedUser, (_, response) => {
-    response.json({ configured: receiptExtractorIsConfigured(config), provider: config.receiptAiProvider, model: receiptExtractorModel(config) });
+export function registerPaymentReadRoutes(app, { supabase, config, requireAuthenticatedUser, efiIsConfigured, aiSettings, receiptExtractorIsConfigured, receiptExtractorModel }) {
+  app.get('/integrations/receipt-extractor', requireAuthenticatedUser, async (_, response) => {
+    const ai = await aiSettings.resolve();
+    response.json({ configured: receiptExtractorIsConfigured(ai), provider: 'omniroute', model: receiptExtractorModel(ai) });
   });
 
   app.get('/payments/efi', requireAuthenticatedUser, async (request, response) => {

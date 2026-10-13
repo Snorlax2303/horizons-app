@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { aiIsConfigured, chatJson } from './llm.js';
 
 export const readOnlyAdminIntentSchema = z.object({
   tool: z.enum([
@@ -120,47 +121,7 @@ needs_clarification=true.
 Schema: {"tool":"...","arguments":{},"confidence":0.0,
 "needs_clarification":false,"clarification_question":null}.`;
 
-function parseJsonObject(content) {
-  if (typeof content !== 'string') throw new Error('MiniMax não retornou texto.');
-  const start = content.indexOf('{');
-  if (start < 0) throw new Error('MiniMax não retornou JSON.');
-  let depth = 0; let quoted = false; let escaped = false;
-  for (let index = start; index < content.length; index += 1) {
-    const character = content[index];
-    if (quoted) {
-      if (escaped) escaped = false;
-      else if (character === '\\') escaped = true;
-      else if (character === '"') quoted = false;
-      continue;
-    }
-    if (character === '"') quoted = true;
-    else if (character === '{') depth += 1;
-    else if (character === '}') {
-      depth -= 1;
-      if (depth === 0) return JSON.parse(content.slice(start, index + 1));
-    }
-  }
-  throw new Error('MiniMax retornou JSON incompleto.');
-}
-
-async function requestIntent(config, model, message, fetchImpl) {
-  const response = await fetchImpl(config.minimaxApiUrl, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${config.minimaxApiKey}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: message },
-      ],
-      max_completion_tokens: config.minimaxMaxCompletionTokens,
-      temperature: config.minimaxTemperature,
-    }),
-    signal: AbortSignal.timeout(config.minimaxTimeoutMs),
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(`MiniMax ${model} respondeu ${response.status}.`);
-  const parsed = parseJsonObject(payload.choices?.[0]?.message?.content);
+function normalizeDevice(parsed) {
   const rawDevice = parsed?.arguments?.device_category;
   if (typeof rawDevice === 'string') {
     const device = rawDevice.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[_-]+/g, ' ').trim();
@@ -173,24 +134,23 @@ async function requestIntent(config, model, message, fetchImpl) {
     };
     parsed.arguments.device_category = aliases[device] || rawDevice;
   }
-  return readOnlyAdminIntentSchema.parse(parsed);
+  return parsed;
 }
 
-export function minimaxAdminIsConfigured(config) {
-  return Boolean(config.minimaxApiKey && config.minimaxApiUrl && config.minimaxPrimaryModel);
+export function adminAiIsConfigured(ai) {
+  return aiIsConfigured(ai, 'smart');
 }
 
-export async function interpretAdminIntent(config, message, options = {}) {
-  if (!minimaxAdminIsConfigured(config)) throw new Error('MiniMax não configurada.');
+// Usa o perfil `smart` e cai para os modelos de fallback quando a resposta
+// falha ou não passa no schema (nenhuma ferramenta inventada é aceita).
+export async function interpretAdminIntent(ai, message, options = {}) {
+  if (!adminAiIsConfigured(ai)) throw new Error('IA (OmniRoute) não configurada.');
   const normalized = String(message || '').trim();
   if (!normalized || normalized.length > 2000) throw new Error('Comando administrativo inválido.');
-  const fetchImpl = options.fetchImpl || globalThis.fetch;
-  try {
-    const intent = await requestIntent(config, config.minimaxPrimaryModel, normalized, fetchImpl);
-    return { model: config.minimaxPrimaryModel, fallback_used: false, intent };
-  } catch (primaryError) {
-    if (!config.minimaxFallbackEnabled || !config.minimaxFallbackModel) throw primaryError;
-    const intent = await requestIntent(config, config.minimaxFallbackModel, normalized, fetchImpl);
-    return { model: config.minimaxFallbackModel, fallback_used: true, intent };
-  }
+  const result = await chatJson(ai, {
+    profile: 'smart', fetchImpl: options.fetchImpl,
+    messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: normalized }],
+    parse: (json) => readOnlyAdminIntentSchema.parse(normalizeDevice(json)),
+  });
+  return { model: result.model, fallback_used: result.fallback_used, intent: result.value };
 }
