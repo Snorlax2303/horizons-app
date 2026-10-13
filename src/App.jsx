@@ -7,7 +7,6 @@ import { KeepAliveProvider } from '@/contexts/KeepAliveContext';
 import MainLayout from '@/components/Layout/MainLayout';
 import LoadingSpinner from '@/components/Common/LoadingSpinner';
 import Login from '@/pages/Login';
-import Register from '@/pages/Register';
 import LeadPublico from '@/pages/LeadPublico';
 import Dashboard from '@/pages/Dashboard';
 import CentralOperacional from '@/pages/CentralOperacional';
@@ -120,7 +119,8 @@ function App() {
                 <Routes>
                   <Route path="/lead" element={<LeadPublico />} />
                   <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-                  <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
+                  {/* Cadastro público desativado: contas novas só pelo proprietário no Supabase. */}
+                  <Route path="/register" element={<Navigate to="/login" replace />} />
                   <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
                     {protectedPages.map((route) => (
                       <Route

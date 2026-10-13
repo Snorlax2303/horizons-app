@@ -7,3 +7,8 @@ dist/
 coverage/
 .automation/
 .automation-venv/
+
+# Backups locais nunca entram no Git (podem conter segredos)
+.env.bak*
+*.bak-*
+*.bak

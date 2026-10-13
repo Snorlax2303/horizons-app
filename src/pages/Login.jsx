@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import Input from '@/components/Common/Input';
 import Button from '@/components/Common/Button';
 import { useToast as useToastNotification } from '@/hooks/useToast';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 // Utility to validate email format
 const isValidEmail = (email) => {
@@ -144,16 +144,6 @@ const Login = () => {
             </Button>
             
           </form>
-
-          <p className="text-center text-sm text-gray-500 dark:text-gray-400 mt-6">
-            Não tem uma conta?{' '}
-            <Link 
-              to="/register" 
-              className="text-green-600 hover:underline font-medium"
-            >
-              Criar Conta
-            </Link>
-          </p>
 
           <p className="text-center text-sm text-gray-500 dark:text-gray-400 mt-2">
             Esqueceu sua senha?{' '}

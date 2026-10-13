@@ -20,6 +20,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on: { redis: { condition: service_healthy } }
+    networks: [default, shared-net]
   worker:
     build: { context: ., target: worker }
     restart: unless-stopped
@@ -27,6 +28,7 @@ services:
     volumes:
       - /opt/certificados:/run/certificados:ro
     depends_on: { redis: { condition: service_healthy } }
+    networks: [default, shared-net]
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -38,3 +40,6 @@ services:
       retries: 5
 volumes:
   horizons-redis:
+networks:
+  shared-net:
+    external: true

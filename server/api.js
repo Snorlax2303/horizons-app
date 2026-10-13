@@ -12,8 +12,11 @@ import { validateReceipt } from './receiptValidation.js';
 import { extractPixReceipt, receiptExtractorIsConfigured, receiptExtractorModel } from './receiptExtractor.js';
 import { createPaggpayClient, normalizePaggpayTransaction, paggpayIsConfigured, paggpayWebhookTransactionId, verifyPaggpayWebhookSignature } from './paggpay.js';
 import { openAccessValue, sealAccessValue } from './accessVault.js';
-import { interpretAdminIntent, minimaxAdminIsConfigured } from './minimaxAdmin.js';
-import { interpretSupportMessage, minimaxSupportIsConfigured } from './minimaxSupport.js';
+import { interpretAdminIntent, adminAiIsConfigured } from './aiAdmin.js';
+import { interpretSupportMessage, supportAiIsConfigured } from './aiSupport.js';
+import { modelChain } from './llm.js';
+import { createAiSettingsStore } from './aiSettings.js';
+import { registerAiSettingsRoutes } from './routes/aiSettings.js';
 import { executeReadOnlyAdminTool } from './adminReadTools.js';
 import { evolutionIsConfigured, sendEvolutionText } from './evolution.js';
 import { classifyCustomerIdentity } from './customerIdentity.js';
@@ -37,6 +40,7 @@ import { WWPANEL_APPS } from './wplayCatalog.js';
 import { runTelegramCommand, parseTelegramCommand } from './telegramCommands.js';
 import { sendTelegramMessage } from './telegramDigest.js';
 import { registerAuditRoute, webhookRateLimit, recordWebhookEvent } from './routes/audit.js';
+import { createRequireAuthenticatedUser, createRequireHorizonsOwner, createRequireOwnerUser } from './auth.js';
 
 const paymentSchema = z.object({
   event_id: z.string().min(1),
@@ -275,34 +279,23 @@ app.use((request, response, next) => {
   });
   next();
 });
+// Guards precisam existir antes do registro dos módulos de rota (const não sofre hoisting).
+const requireAuthenticatedUser = createRequireAuthenticatedUser(supabase);
+const requireHorizonsOwner = createRequireHorizonsOwner(config.horizonsOwnerUserId, 'Assistente administrativo restrito ao proprietário.');
+const requireOwnerUser = createRequireOwnerUser(requireAuthenticatedUser, createRequireHorizonsOwner(config.horizonsOwnerUserId));
+const aiSettings = createAiSettingsStore({ supabase, config });
 registerHealthRoute(app);
-registerSystemHealthRoute(app, { requireAuthenticatedUser, config, supabase });
+registerSystemHealthRoute(app, { requireAuthenticatedUser, config, supabase, aiSettings });
 registerAuditRoute(app, { supabase, requireAuthenticatedUser });
 registerSimulatorRoutes(app, { requireAuthenticatedUser });
 registerBillingRoutes(app, { supabase, requireAuthenticatedUser });
 registerPaymentOverviewRoutes(app, { supabase, requireAuthenticatedUser });
 registerRenewalListRoutes(app, { supabase, requireAuthenticatedUser, config });
 registerCatalogRoutes(app, { supabase, requireAuthenticatedUser, z, config });
-registerWplayRoutes(app, { supabase, requireAuthenticatedUser, config, z });
+// WPlay consome crédito real: somente o proprietário pode usar estas rotas.
+registerWplayRoutes(app, { supabase, requireAuthenticatedUser: requireOwnerUser, config, z });
+registerAiSettingsRoutes(app, { requireOwnerUser, aiSettings, z });
 const webhookGuard = webhookRateLimit({ windowMs: 60_000, max: 60 });
-
-async function requireAuthenticatedUser(request, response, next) {
-  const authorization = request.get('authorization') || '';
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  if (!match) return response.status(401).json({ error: 'Autenticação obrigatória.' });
-
-  const { data, error } = await supabase.auth.getUser(match[1]);
-  if (error || !data.user) return response.status(401).json({ error: 'Sessão inválida ou expirada.' });
-  request.horizonsUser = data.user;
-  return next();
-}
-
-function requireHorizonsOwner(request, response, next) {
-  if (!config.horizonsOwnerUserId || request.horizonsUser?.id !== config.horizonsOwnerUserId) {
-    return response.status(403).json({ error: 'Assistente administrativo restrito ao proprietário.' });
-  }
-  return next();
-}
 
 async function auditAdminAssistant(entry, channel = 'web') {
   const { error } = await supabase.from('admin_assistant_audit').insert({
@@ -344,7 +337,7 @@ function protectedAdminRequestText(tool, command) {
 async function runAdminAssistantCommand(command, { channel = 'web', senderReference = null, messageId = null } = {}) {
   let interpreted;
   try {
-    interpreted = await interpretAdminIntent(config, command);
+    interpreted = await interpretAdminIntent(await aiSettings.resolve(), command);
     if (interpreted.intent.tool === 'create_assisted_test' && !interpreted.intent.arguments.device_category) {
       const question = 'Reenvie o pedido completo informando onde o teste será usado: Smart TV, Android/Google TV, TV Box, celular, computador, console ou outro. Informe também a marca, se souber.';
       await auditAdminAssistant({
@@ -395,12 +388,15 @@ async function runAdminAssistantCommand(command, { channel = 'web', senderRefere
   }
 }
 
-app.get('/admin-assistant/status', requireAuthenticatedUser, requireHorizonsOwner, (_, response) => {
+app.get('/admin-assistant/status', requireAuthenticatedUser, requireHorizonsOwner, async (_, response) => {
+  const ai = await aiSettings.resolve();
+  const chain = modelChain(ai, 'smart');
   response.json({
-    configured: minimaxAdminIsConfigured(config),
-    primary_model: config.minimaxPrimaryModel,
-    fallback_enabled: config.minimaxFallbackEnabled,
-    fallback_model: config.minimaxFallbackModel,
+    provider: 'omniroute',
+    configured: adminAiIsConfigured(ai),
+    primary_model: chain[0] || null,
+    fallback_enabled: chain.length > 1,
+    fallback_model: chain[1] || null,
     mode: config.adminAssistantWritesEnabled ? 'confirmed_writes' : 'read_only',
     whatsapp_connected: config.adminAssistantWhatsappEnabled && config.adminAssistantAllowedPhones.length > 0,
     whatsapp_allowlist_count: config.adminAssistantAllowedPhones.length,
@@ -1552,7 +1548,7 @@ async function processAdminAssistantTelegram({ userId, chatId, text, messageId }
       .eq('user_id', config.horizonsOwnerUserId).eq('channel', 'telegram').eq('message_id', messageId).maybeSingle();
     if (duplicate) return;
   }
-  // Atalho para comandos financeiros diretos (sem passar pelo MiniMax).
+  // Atalho para comandos financeiros diretos (sem passar pela IA).
   const parsed = parseTelegramCommand(text);
   if (parsed) {
     const known = ['baixa', 'aprovacoes', 'recuperacao', 'renovacoes', 'digest', 'lembretes', 'semacesso', 'semcheckout', 'semcredenciais', 'aprovar', 'rejeitar', 'recuperar', 'hoje'];
@@ -1849,18 +1845,19 @@ app.post('/typebot/botbot/messages', async (request, response) => {
   }
 });
 
-// Interpreta texto livre para o Typebot. A MiniMax só classifica e extrai
+// Interpreta texto livre para o bot (n8n). A IA (OmniRoute) só classifica e extrai
 // contexto; este endpoint não executa qualquer ação comercial ou financeira.
 app.post('/typebot/ai/interpret', async (request, response) => {
   if (!requireTypebotBridge(request, response)) return;
-  if (!minimaxSupportIsConfigured(config)) return response.status(503).json({ error: 'Assistente MiniMax não configurado.' });
+  const ai = await aiSettings.resolve();
+  if (!supportAiIsConfigured(ai)) return response.status(503).json({ error: 'IA (OmniRoute) não configurada.', route: 'human' });
   const parsed = typebotAiInterpretSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: 'Mensagem inválida.', details: parsed.error.flatten() });
   try {
-    const interpretation = await interpretSupportMessage(config, parsed.data.message);
+    const interpretation = await interpretSupportMessage(ai, parsed.data.message);
     return response.json(interpretation);
   } catch (error) {
-    console.error('Falha ao interpretar atendimento com MiniMax', error.message);
+    console.error('Falha ao interpretar atendimento com IA', error.message);
     return response.status(502).json({ error: 'Não consegui interpretar a mensagem agora.', route: 'human' });
   }
 });
@@ -2763,7 +2760,7 @@ async function processEvolutionReceipt(media) {
   try {
     const base64 = await evolutionMediaBase64(media.message, media.instanceName);
     if (!base64) throw new Error('Evolution não retornou o conteúdo da mídia.');
-    const extracted = await extractPixReceipt(config, { base64, mimeType: media.mimeType });
+    const extracted = await extractPixReceipt(await aiSettings.resolve(), { base64, mimeType: media.mimeType });
     const validation = validateReceipt(extracted, { amount: renewal.expected_amount });
     await supabase.from('pix_receipts').update({
       extraction_status: 'completed', extracted_data: {
@@ -2788,6 +2785,7 @@ registerPaymentReadRoutes(app, {
   config,
   requireAuthenticatedUser,
   efiIsConfigured,
+  aiSettings,
   receiptExtractorIsConfigured,
   receiptExtractorModel,
 });
