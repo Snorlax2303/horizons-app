@@ -10,7 +10,7 @@ function paging(request, defaultLimit = 50, maxLimit = 200) {
   return { limit, offset };
 }
 
-export function registerBillingRoutes(app, { supabase, requireAuthenticatedUser }) {
+export function registerBillingRoutes(app, { supabase, requireAuthenticatedUser, requireBotBridge, ownerUserId }) {
   app.get('/billing/trends', requireAuthenticatedUser, async (request, response) => {
     const days = Math.min(Math.max(Number(request.query.days) || 30, 7), 180);
     const since = new Date(); since.setUTCDate(since.getUTCDate() - days); since.setUTCHours(0, 0, 0, 0);
@@ -93,23 +93,35 @@ export function registerBillingRoutes(app, { supabase, requireAuthenticatedUser 
     return response.json({ items: rows, count: countResult.count || 0, limit, offset, has_more: (countResult.count || 0) > offset + rows.length });
   });
 
-  app.get('/billing/reminders/sendable', requireAuthenticatedUser, async (request, response) => {
+  async function listSendable(userId, request, response) {
     const { limit, offset } = paging(request, 50, 200);
     const { data, error } = await supabase.from('billing_reminder_queue')
       .select('id,due_date,stage,payment_method,checkout_url,message_preview,status,customers(id,name,phone)')
-      .eq('user_id', request.horizonsUser.id).eq('status', 'approved').order('due_date').range(offset, offset + limit - 1);
+      .eq('user_id', userId).eq('status', 'approved').order('due_date').range(offset, offset + limit - 1);
     if (error) return response.status(500).json({ error: error.message });
-    return response.json({ items: data || [], count: data?.length || 0, limit, offset, note: 'Lista pronta para envio pelo n8n; o disparo permanece desligado até homologação.' });
-  });
+    return response.json({ items: data || [], count: data?.length || 0, limit, offset, note: 'Somente lembretes aprovados na Central Operacional.' });
+  }
 
-  app.post('/billing/reminders/:id/sent', requireAuthenticatedUser, async (request, response) => {
+  // Marca como enviado apenas o que estava aprovado: evita reenvio e não
+  // permite que o bot "envie" um lembrete que ninguém aprovou.
+  async function markSent(userId, request, response) {
+    const now = new Date().toISOString();
     const { data, error } = await supabase.from('billing_reminder_queue')
-      .update({ status: 'sent', sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq('id', request.params.id).eq('user_id', request.horizonsUser.id).select('*').maybeSingle();
+      .update({ status: 'sent', sent_at: now, updated_at: now })
+      .eq('id', request.params.id).eq('user_id', userId).eq('status', 'approved').select('*').maybeSingle();
     if (error) return response.status(500).json({ error: error.message });
-    if (!data) return response.status(404).json({ error: 'Lembrete não encontrado.' });
+    if (!data) return response.status(409).json({ error: 'Lembrete não está aprovado ou já foi enviado.' });
     return response.json({ reminder: data, sent: true, message: 'Lembrete marcado como enviado.' });
-  });
+  }
+
+  app.get('/billing/reminders/sendable', requireAuthenticatedUser, (request, response) => listSendable(request.horizonsUser.id, request, response));
+  app.post('/billing/reminders/:id/sent', requireAuthenticatedUser, (request, response) => markSent(request.horizonsUser.id, request, response));
+
+  // Mesmas operações para o workflow do n8n, autenticado pelo token da ponte do bot.
+  if (requireBotBridge && ownerUserId) {
+    app.get('/typebot/billing/reminders/sendable', requireBotBridge, (request, response) => listSendable(ownerUserId, request, response));
+    app.post('/typebot/billing/reminders/:id/sent', requireBotBridge, (request, response) => markSent(ownerUserId, request, response));
+  }
 
   app.get('/recovery/:id/history', requireAuthenticatedUser, async (request, response) => {
     const { data: row, error: rowError } = await supabase.from('customer_recovery_queue')

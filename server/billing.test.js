@@ -54,3 +54,29 @@ test('marcar lembrete como enviado altera status e sent_at', async () => {
   assert.equal(updated.status, 'sent');
   assert.ok(typeof updated.sent_at === 'string');
 });
+
+test('rotas do bot usam o token da ponte, o dono fixo e só enviam lembretes aprovados', async () => {
+  const routes = {};
+  const app = { get(path, ...handlers) { routes[`GET ${path}`] = handlers; }, post(path, ...handlers) { routes[`POST ${path}`] = handlers; } };
+  const filters = [];
+  const supabase = {
+    from() { return this; }, update() { return this; }, select() { return this; },
+    eq(column, value) { filters.push([column, value]); return this; },
+    maybeSingle: async () => ({ data: null, error: null }),
+  };
+  const bridge = (_, __, next) => next();
+  registerBillingRoutes(app, { supabase, requireAuthenticatedUser: (_, __, next) => next(), requireBotBridge: bridge, ownerUserId: 'owner-1' });
+  assert.equal(routes['GET /typebot/billing/reminders/sendable'][0], bridge);
+  assert.equal(routes['POST /typebot/billing/reminders/:id/sent'][0], bridge);
+  const res = { body: null, statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+  await routes['POST /typebot/billing/reminders/:id/sent'].at(-1)({ params: { id: 'rem-1' }, body: {} }, res);
+  assert.equal(res.statusCode, 409);
+  assert.deepEqual(filters, [['id', 'rem-1'], ['user_id', 'owner-1'], ['status', 'approved']]);
+});
+
+test('sem ponte configurada as rotas do bot não são registradas', () => {
+  const routes = {};
+  const app = { get(path) { routes[path] = true; }, post(path) { routes[path] = true; } };
+  registerBillingRoutes(app, { supabase: {}, requireAuthenticatedUser: () => {} });
+  assert.equal(routes['/typebot/billing/reminders/sendable'], undefined);
+});

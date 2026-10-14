@@ -13,7 +13,7 @@ import { extractPixReceipt, receiptExtractorIsConfigured, receiptExtractorModel 
 import { createPaggpayClient, normalizePaggpayTransaction, paggpayIsConfigured, paggpayWebhookTransactionId, verifyPaggpayWebhookSignature } from './paggpay.js';
 import { openAccessValue, sealAccessValue } from './accessVault.js';
 import { interpretAdminIntent, adminAiIsConfigured } from './aiAdmin.js';
-import { interpretSupportMessage, supportAiIsConfigured } from './aiSupport.js';
+import { finalizeInterpretation, interpretSupportMessage, supportAiIsConfigured } from './aiSupport.js';
 import { modelChain } from './llm.js';
 import { createAiSettingsStore } from './aiSettings.js';
 import { registerAiSettingsRoutes } from './routes/aiSettings.js';
@@ -41,6 +41,8 @@ import { runTelegramCommand, parseTelegramCommand } from './telegramCommands.js'
 import { sendTelegramMessage } from './telegramDigest.js';
 import { registerAuditRoute, webhookRateLimit, recordWebhookEvent } from './routes/audit.js';
 import { createRequireAuthenticatedUser, createRequireHorizonsOwner, createRequireOwnerUser } from './auth.js';
+import { evolutionInboundMedia, receiptInstances, receiptRejectionReason } from './evolutionMedia.js';
+import { registerReceiptMaintenanceRoutes } from './routes/receiptMaintenance.js';
 
 const paymentSchema = z.object({
   event_id: z.string().min(1),
@@ -285,10 +287,13 @@ const requireHorizonsOwner = createRequireHorizonsOwner(config.horizonsOwnerUser
 const requireOwnerUser = createRequireOwnerUser(requireAuthenticatedUser, createRequireHorizonsOwner(config.horizonsOwnerUserId));
 const aiSettings = createAiSettingsStore({ supabase, config });
 registerHealthRoute(app);
-registerSystemHealthRoute(app, { requireAuthenticatedUser, config, supabase, aiSettings });
+registerSystemHealthRoute(app, { requireAuthenticatedUser, requireOwnerUser, config, supabase, aiSettings });
 registerAuditRoute(app, { supabase, requireAuthenticatedUser });
 registerSimulatorRoutes(app, { requireAuthenticatedUser });
-registerBillingRoutes(app, { supabase, requireAuthenticatedUser });
+registerBillingRoutes(app, {
+  supabase, requireAuthenticatedUser, ownerUserId: config.horizonsOwnerUserId,
+  requireBotBridge: (request, response, next) => (requireTypebotBridge(request, response) ? next() : undefined),
+});
 registerPaymentOverviewRoutes(app, { supabase, requireAuthenticatedUser });
 registerRenewalListRoutes(app, { supabase, requireAuthenticatedUser, config });
 registerCatalogRoutes(app, { supabase, requireAuthenticatedUser, z, config });
@@ -434,18 +439,6 @@ async function evolutionMediaBase64(message, instanceName = null) {
   const payload = await result.json().catch(() => ({}));
   if (!result.ok) throw new Error(payload?.message || `Evolution respondeu ${result.status}`);
   return String(payload.base64 || payload.data?.base64 || '').replace(/^data:[^;]+;base64,/, '');
-}
-
-function evolutionInboundMedia(body) {
-  const data = body?.data || body;
-  const message = data?.message || {};
-  const media = message.imageMessage || message.documentMessage;
-  if (!media) return null;
-  const remote = data?.key?.remoteJid || data?.sender || '';
-  return { phone: String(remote).replace(/@.+$/, '').replace(/\D/g, ''), messageId: data?.key?.id || data?.id,
-    mimeType: media.mimetype || (message.imageMessage ? 'image/jpeg' : 'application/pdf'), message,
-    instanceName: String(body?.instance || data?.instance || body?.instanceName || data?.instanceName || '').trim(),
-    caption: String(media.caption || '').trim().slice(0, 2000) || null };
 }
 
 async function notifyPanelDisconnected(connectionId) {
@@ -1747,11 +1740,11 @@ app.post('/webhooks/evolution', webhookGuard, async (request, response) => {
     console.error('Falha ao arquivar conversa de suporte', error.message);
   }
   const inboundMedia = evolutionInboundMedia(request.body || {});
-  const receiptInstances = [config.evolutionFinanceInstance, config.evolutionSalesInstance]
-    .filter((instance) => instance && String(instance).trim());
-  const isFinanceMedia = inboundMedia && (receiptInstances.length === 0
-    || receiptInstances.includes(inboundMedia.instanceName));
-  if (inboundMedia?.phone && inboundMedia?.messageId && isFinanceMedia) {
+  const mediaRejection = receiptRejectionReason(inboundMedia, config);
+  if (inboundMedia && mediaRejection) {
+    console.info(JSON.stringify({ event: 'evolution_media_ignored', reason: mediaRejection, instance: inboundMedia.instanceName || null }));
+  }
+  if (inboundMedia && !mediaRejection) {
     response.status(202).json({ accepted: true, media: true });
     setImmediate(() => processEvolutionReceipt(inboundMedia).catch((error) => console.error('Falha no webhook Evolution', error.message)));
     return;
@@ -1854,8 +1847,10 @@ app.post('/typebot/ai/interpret', async (request, response) => {
   const parsed = typebotAiInterpretSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: 'Mensagem inválida.', details: parsed.error.flatten() });
   try {
-    const interpretation = await interpretSupportMessage(ai, parsed.data.message);
-    return response.json(interpretation);
+    const result = await interpretSupportMessage(ai, parsed.data.message, { withMeta: true });
+    const interpretation = finalizeInterpretation(result.value, parsed.data.message);
+    console.info(JSON.stringify({ event: 'ai_interpret', model: result.model, fallback_used: result.fallback_used, intent: interpretation.intent, route: interpretation.route, confidence: interpretation.confidence }));
+    return response.json({ ...interpretation, model: result.model, fallback_used: result.fallback_used });
   } catch (error) {
     console.error('Falha ao interpretar atendimento com IA', error.message);
     return response.status(502).json({ error: 'Não consegui interpretar a mensagem agora.', route: 'human' });
@@ -2778,6 +2773,21 @@ async function processEvolutionReceipt(media) {
     console.error('Falha ao processar comprovante Evolution', error.message);
   }
 }
+
+// Manutenção do backlog de comprovantes (reprocessar falhas / arquivar grupos).
+registerReceiptMaintenanceRoutes(app, {
+  supabase, requireOwnerUser, z, ownerUserId: config.horizonsOwnerUserId, aiSettings,
+  extractPixReceipt, receiptExtractorIsConfigured, validateReceipt,
+  // A mensagem antiga só tem o id; a Evolution busca a mídia pelo key.id na instância que a recebeu.
+  fetchMediaBase64: async (messageId) => {
+    const instances = [...new Set([...receiptInstances(config), config.evolutionInstance].filter(Boolean))];
+    for (const instance of instances) {
+      const base64 = await evolutionMediaBase64({ key: { id: messageId } }, instance).catch(() => null);
+      if (base64) return base64;
+    }
+    return null;
+  },
+});
 
 // Rotas de leitura de pagamentos e renovações registradas por módulo.
 registerPaymentReadRoutes(app, {

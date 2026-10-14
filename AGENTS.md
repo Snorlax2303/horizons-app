@@ -3,7 +3,9 @@
 ## Fonte de verdade entre conversas
 
 Antes de analisar, alterar ou executar qualquer tarefa neste repositório, leia
-integralmente `PROJECT_STATUS.md`. Ele é a memória operacional durável do
+integralmente `PROJECT_STATUS.md` (estado atual) e consulte
+`docs/historico/PROJECT_STATUS-ate-2026-10-13.md` quando precisar do histórico
+detalhado de uma integração. Ele é a memória operacional durável do
 Horizons e deve permitir que um agente novo retome o projeto sem depender do
 histórico de conversa.
 

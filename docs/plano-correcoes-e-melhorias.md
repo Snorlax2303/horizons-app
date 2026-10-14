@@ -8,6 +8,14 @@ Decisões do dono nesta rodada:
   em `127.0.0.1:20129/v1`), usando modelos ChatGPT (provedor `codex`) e Claude (provedor
   `claude`), já conectados e ativos no OmniRoute.
 
+## Andamento (2026-10-13)
+
+- Fase 0: concluída.
+- Fase 1: código e tela publicados; falta o dono salvar a chave/modelos.
+- Fase 2: lado servidor pronto (`/typebot/ai/interpret` com entidades e limiares); falta ligar no n8n.
+- Fase 3: filtro de mídia corrigido, ferramentas de reprocessamento/arquivamento e rotas de lembretes do bot prontas; aguardam WhatsApp/chave/confirmação.
+- Fase 4: monitor no Telegram ativo, `proxy-addr`/`qs` corrigidos, `PROJECT_STATUS.md` enxugado; restante listado em `PROJECT_STATUS.md`.
+
 Regra geral: cada fase termina com testes verdes, deploy controlado (com aviso de impacto) e
 atualização do `PROJECT_STATUS.md`. Nenhuma escrita em painel externo, cobrança ou mensagem
 proativa sem confirmação explícita.

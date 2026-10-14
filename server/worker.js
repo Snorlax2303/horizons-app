@@ -7,6 +7,8 @@ import { sendEvolutionText } from './evolution.js';
 import { composeDailyDigest, sendTelegramMessage } from './telegramDigest.js';
 import { composeRenewalListMessage, loadWhatsappRenewalItems } from './routes/renewalList.js';
 import { openAccessValue } from './accessVault.js';
+import { createAiSettingsStore } from './aiSettings.js';
+import { monitorSettings, runHealthMonitor } from './healthMonitor.js';
 
 const config = getConfig();
 const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
@@ -55,6 +57,20 @@ if (staleCatalogEnabled) {
     removeOnFail: 100,
   });
   workerEvent('stale_catalog_scheduled', { cron: staleCatalogCron });
+}
+
+// Monitor de saúde: avisa o dono no Telegram quando WhatsApp/entrada/IA param.
+const healthMonitor = monitorSettings();
+const aiSettings = createAiSettingsStore({ supabase, config });
+
+if (healthMonitor.enabled) {
+  await automationQueue.add('health-monitor', {}, {
+    repeat: { pattern: healthMonitor.cron },
+    jobId: 'health-monitor-repeat',
+    removeOnComplete: 50,
+    removeOnFail: 50,
+  });
+  workerEvent('health_monitor_scheduled', { cron: healthMonitor.cron });
 }
 
 async function returnToManual(operationId, reason) {
@@ -127,6 +143,15 @@ const worker = new Worker('iptv-automation', async (job) => {
     });
     workerEvent('job_completed', { job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt, count: items.length, status: sendResponse.status });
     return { sent: sendResponse.ok, count: items.length, status: sendResponse.status };
+  }
+  if (job.name === 'health-monitor') {
+    const result = await runHealthMonitor({ config, supabase, aiSettings, redis: connection, sendTelegramMessage, settings: healthMonitor });
+    workerEvent('job_completed', {
+      job_id: job.id, job_name: job.name, attempt, duration_ms: Date.now() - startedAt,
+      problems: result.signals.problems.map((item) => item.key),
+      opened: result.plan.opened.length, resolved: result.plan.resolved.length, delivery: result.delivery,
+    });
+    return { problems: result.signals.problems.length };
   }
   if (job.name === 'stale-delivery-profiles') {
     const today = new Date().toISOString().slice(0, 10);

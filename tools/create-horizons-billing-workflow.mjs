@@ -111,11 +111,11 @@ const nodes = [
   node('Agendar busca', 'n8n-nodes-base.scheduleTrigger', [-340, 240], {
     rule: { interval: [{ field: 'cronExpression', expression: '*/30 * * * *' }] },
   }),
-  http('Buscar lembretes aprovados', 240, 'GET', '/billing/reminders/sendable', undefined),
+  http('Buscar lembretes aprovados', 240, 'GET', '/typebot/billing/reminders/sendable', undefined),
   code('Separar por lembrete', 520, 240, splitCode),
   code('Montar envio', 980, 240, sendCode),
   sendEvolution,
-  http('Marcar como enviado', 1300, 'POST', '/billing/reminders/{{$json.id}}/sent', '={{ JSON.stringify({}) }}'),
+  http('Marcar como enviado', 1300, 'POST', '/typebot/billing/reminders/{{$json.id}}/sent', '={{ JSON.stringify({}) }}'),
   code('Log final', 1520, 240, "return [{ json: { id: $json.id, sent: $json.sent !== false, at: new Date().toISOString() } }];"),
 ];
 
