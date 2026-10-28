@@ -8,6 +8,28 @@ Decisões do dono nesta rodada:
   em `127.0.0.1:20129/v1`), usando modelos ChatGPT (provedor `codex`) e Claude (provedor
   `claude`), já conectados e ativos no OmniRoute.
 
+## Repriorização após auditoria de 2026-10-26
+
+Antes das fases pendentes: recuperar o Supabase existente (estado INACTIVE confirmado na gestão), conferir integridade/disponibilidade e só então recuperar o worker ausente. API/frontend HTTP 200 não comprovam banco funcional. Verificar jobs e flags de envio antes de iniciar worker; há um health-monitor ativo preso e outro atrasado. Financeiro está desconectado e sem webhook configurado; bot segue ativo no n8n sem rota de IA. As contagens financeiras e ausência de chave de IA de 13/10 não foram revalidadas porque o banco está indisponível.
+
+Validações de 26/10: 134 testes no container Node 22, lint e build aprovados. Nenhum deploy, mensagem, operação de painel ou alteração financeira nesta auditoria. Ordem: banco → worker/monitor → IA → WhatsApp/webhooks → bot serializado → backlog/lembretes → segredos/retenção/dependências/modularização.
+
+## Execução de 2026-10-27
+
+Arquivamento confirmado pelo dono e concluído em transação única: 71 renovações de grupos e 3.930 comprovantes pendentes marcados como rejeitados, sem exclusões. Conferência posterior: 84 renovações privadas aguardando revisão, 357 comprovantes pendentes e nenhum grupo aberto. Dono já possui chave OmniRoute, mas chave/modelos ainda não estavam salvos no Horizons na consulta desta rodada.
+
+## Execução de 2026-10-26
+
+- Banco reativado e consultas autenticadas funcionando; cadastro público continua desligado.
+- Worker recuperado; monitor corrigido para reportar indisponibilidade do banco.
+- Dono escolheu Financeiro para comprovantes; webhook configurado e exclusividade publicada. Reconexão por QR fica com o dono.
+- Valores de credenciais de gestão/painel/MiniMax neutralizados no ambiente dos containers api/worker.
+- Vite/Zod e transitivas atualizadas: audit 0; schemas migrados, 136 testes aprovados. Tailwind 4 deixa de ser requisito de segurança para o audit observado.
+- Carregamento de páginas sob demanda publicado: JS inicial de 1,38 MB para 562,48 kB. Login renderizado no Chrome; smoke aprovado.
+- IA ausente confirmada no banco. Acesso de gestão OmniRoute via CLI retornou 401; dono deve criar chave dedicada e configurar modelos na tela. Nenhuma chave reaproveitada de outro serviço.
+- Prévia: 71 renovações de grupos/3.930 comprovantes pendentes. Arquivamento aguardando confirmação específica, sem alterações financeiras.
+- Restante: chave/modelos, QR e número controlado; bot IA/serialização; reprocessamento; lembretes; retenção n8n; modularização API; decisão Union/Unix. Nenhum desses passos é considerado concluído.
+
 ## Andamento (2026-10-13)
 
 - Fase 0: concluída.

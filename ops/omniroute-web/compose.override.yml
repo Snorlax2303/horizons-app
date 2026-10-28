@@ -1,0 +1,7 @@
+# Apply after /opt/OmniRoute/docker-compose.yml; keeps the existing host profile.
+services:
+  omniroute-host:
+    image: omniroute:horizons-web
+    build:
+      context: /root/horizons-app/ops/omniroute-web
+      dockerfile: Dockerfile

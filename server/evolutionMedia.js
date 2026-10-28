@@ -24,7 +24,10 @@ export function evolutionInboundMedia(body) {
 }
 
 export function receiptInstances(config) {
-  return [config.evolutionFinanceInstance, config.evolutionSalesInstance]
+  const instances = Array.isArray(config.evolutionReceiptInstances)
+    ? config.evolutionReceiptInstances
+    : [config.evolutionFinanceInstance, config.evolutionSalesInstance];
+  return instances
     .map((instance) => String(instance || '').trim()).filter(Boolean);
 }
 

@@ -72,3 +72,26 @@ test('não grava estado quando o Telegram falha, para tentar de novo', async () 
   assert.match(sentText, /^42:.*A/s);
   assert.equal(JSON.parse(store.values().next().value)['evolution:A'].text.includes('A'), true);
 });
+
+
+test('banco indisponível gera alerta sem fingir contagens zero ou chave ausente', async () => {
+  for (const rejected of [false, true]) {
+    const unavailable = { from() {
+      const api = {
+        select() { return api; }, eq() { return api; }, order() { return api; }, limit() { return api; }, gte() { return api; },
+        maybeSingle() { return rejected ? Promise.reject(new Error('private connection details')) : Promise.resolve({ error: { code: 'db_down' } }); },
+        then(resolve, reject) { return (rejected ? Promise.reject(new Error('private connection details')) : Promise.resolve({ error: { code: 'db_down' } })).then(resolve, reject); },
+      };
+      return api;
+    } };
+    const signals = await collectHealthSignals({ config, settings, now: NOW, supabase: unavailable,
+      aiSettings: { resolve: async () => { throw new Error('private secret'); } },
+      fetchImpl: evolution([{ name: 'Horizons Typebot', connectionState: 'open' }]),
+    });
+    assert.equal(signals.database.status, 'error');
+    assert.deepEqual(signals.receipts_24h, { failed: null, total: null });
+    assert.equal(signals.ai_configured, null);
+    assert.deepEqual(signals.problems.map(p => p.key), ['database:unavailable']);
+    assert.ok(!JSON.stringify(signals).includes('private'));
+  }
+});

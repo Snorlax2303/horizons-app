@@ -42,7 +42,7 @@ Express API ─────── Supabase/PostgreSQL
     ├── Telegram administrativo
     ├── PaggPay e Efí (quando configurados)
     ├── CineHub/Union (testes homologados)
-    ├── MiniMax (assistente e leitura de comprovantes)
+    ├── OmniRoute (assistente, interpretação e leitura de comprovantes)
     └── agente local de painéis (fluxos previamente homologados)
 ```
 
@@ -87,7 +87,12 @@ Depois da autenticação, o painel possui estas áreas:
 | `/importacao` | Importação CSV |
 | `/logs` | Logs locais legados |
 | `/reparo-telefones` | Reparo cadastral de telefones |
-| `/configuracoes` | Configurações |
+| `/configuracoes` | Configurações e IA (OmniRoute) |
+| `/saude` | Saúde das integrações e monitor operacional |
+| `/novo-acesso` | Assistente de novo acesso |
+| `/wplay` | Painel WPlay (somente proprietário) |
+| `/baixa` | Baixa de pagamentos |
+| `/revisao` | Revisão financeira |
 
 ## Requisitos
 

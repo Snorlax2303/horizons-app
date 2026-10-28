@@ -65,6 +65,12 @@ export const toast = ({ ...props }) => {
   }
 }
 
+// Identidades estáveis: consumidores podem usar estas funções em dependências
+// de efeitos sem disparar recargas a cada edição do formulário.
+const success = (title, description) => toast({ title, description });
+const error = (title, description) => toast({ title, description, variant: 'destructive' });
+const info = (title, description) => toast({ title, description });
+
 export function useToast() {
   const [state, setState] = useState(toastStore.getState())
   
@@ -96,13 +102,11 @@ export function useToast() {
     }
   }, [state.toasts])
 
-  const notify = (title, description, variant) => toast({ title, description, variant });
-
   return {
     toast,
     toasts: state.toasts,
-    success: (title, description) => notify(title, description),
-    error: (title, description) => notify(title, description, 'destructive'),
-    info: (title, description) => notify(title, description),
+    success,
+    error,
+    info,
   }
 }

@@ -104,3 +104,23 @@ test('routes are owner-guarded, validate input and test the connection', async (
   assert.equal(tested.body.chat.ok, true);
   assert.equal(calls[0].auth, 'Bearer sk-route-key-5678');
 });
+
+
+test('falha de navegador retorna resultado legível sem dados internos e sem 502 substituível pelo proxy', async () => {
+  const app = fakeApp();
+  const store = createAiSettingsStore({ supabase: memorySupabase(), config });
+  await store.save({ apiKey: 'sk-test-private-key', models: { fast: 'gemini-web/test' } }, 'owner-1');
+  registerAiSettingsRoutes(app, { requireOwnerUser: () => {}, aiSettings: store, z,
+    fetchImpl: async url => url.endsWith('/models')
+      ? new Response(JSON.stringify({ data: [{ id: 'gemini-web/test' }] }))
+      : new Response(JSON.stringify({ error: { message: "Cannot find module '/private/node_modules/playwright-core/browsers.json'" } }), { status: 500 }),
+  });
+  const result = response();
+  await app.routes['POST /settings/ai/test'].at(-1)({ body: { model: 'gemini-web/test' } }, result);
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.ok, false);
+  assert.equal(result.body.upstream_status, 500);
+  assert.match(result.body.error, /Playwright/);
+  assert.ok(!JSON.stringify(result.body).includes('/private'));
+  assert.ok(!JSON.stringify(result.body).includes('sk-test-private-key'));
+});

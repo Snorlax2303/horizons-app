@@ -51,7 +51,7 @@ const paymentSchema = z.object({
   external_payment_id: z.string().min(1).optional(),
   amount: z.number().nonnegative().optional(),
   paid_at: z.string().datetime().optional(),
-  raw: z.record(z.unknown()).optional(),
+  raw: z.record(z.string(), z.unknown()).optional(),
 });
 
 const efiPixChargeSchema = z.object({
@@ -142,7 +142,7 @@ const typebotIntakeSchema = z.object({
     simultaneous_screens: z.coerce.number().int().min(1).max(99).nullable().optional(),
     plan_term: z.string().trim().max(80).nullable().optional(),
     control_media_refs: z.array(z.string().url().max(2000)).max(3).optional(),
-    answers: z.record(z.unknown()).optional(),
+    answers: z.record(z.string(), z.unknown()).optional(),
   }).optional(),
 });
 
@@ -193,7 +193,7 @@ const renewalRequestSchema = z.object({
 });
 const receiptSchema = z.object({
   whatsapp_message_id: z.string().trim().max(300).nullable().optional(), media_type: z.enum(['image', 'pdf']),
-  media_reference: z.string().trim().min(1).max(2000), extracted_data: z.record(z.unknown()).default({}),
+  media_reference: z.string().trim().min(1).max(2000), extracted_data: z.record(z.string(), z.unknown()).default({}),
   confidence: z.number().min(0).max(1).nullable().optional(), end_to_end_id: z.string().trim().max(80).nullable().optional(),
   amount: z.number().positive().max(100000).nullable().optional(), paid_at: z.string().datetime().nullable().optional(),
   payer_name: z.string().trim().max(200).nullable().optional(), recipient_name: z.string().trim().max(200).nullable().optional(),
@@ -238,7 +238,7 @@ const captureEventsSchema = z.object({
     sequence: z.number().int().nonnegative(), event_type: z.enum(['page', 'click', 'error']),
     page_url: z.string().max(2000).nullable().optional(), page_title: z.string().max(500).nullable().optional(),
     selector: z.string().max(2000).nullable().optional(), element_text: z.string().max(1000).nullable().optional(),
-    dom_outline: z.array(z.record(z.unknown())).max(300).default([]), screenshot_base64: z.string().max(180000).nullable().optional(),
+    dom_outline: z.array(z.record(z.string(), z.unknown())).max(300).default([]), screenshot_base64: z.string().max(180000).nullable().optional(),
   })).min(1).max(20),
 });
 
@@ -247,7 +247,7 @@ const operationSchema = z.object({
   customer_id: z.string().uuid().nullable().optional(),
   customer_panel_target_id: z.string().uuid().nullable().optional(),
   panel_connection_id: z.string().uuid(),
-  input: z.record(z.unknown()).default({}),
+  input: z.record(z.string(), z.unknown()).default({}),
 });
 
 const leadSchema = z.object({
@@ -256,7 +256,7 @@ const leadSchema = z.object({
   phone: z.string().trim().min(8).max(32),
   consent: z.literal(true),
   source: z.enum(['landing_page', 'ad_lead', 'referral']).default('landing_page'),
-  source_metadata: z.record(z.unknown()).default({}),
+  source_metadata: z.record(z.string(), z.unknown()).default({}),
   referral_code: z.string().trim().max(80).optional(),
 });
 
@@ -932,7 +932,7 @@ app.get('/agent/commands/next', requirePanelAgent, async (request, response) => 
 });
 
 app.post('/agent/commands/:id/result', requirePanelAgent, async (request, response) => {
-  const parsed = z.object({ ok: z.boolean(), result: z.record(z.unknown()).optional(), error: z.string().max(1000).optional() }).safeParse(request.body);
+  const parsed = z.object({ ok: z.boolean(), result: z.record(z.string(), z.unknown()).optional(), error: z.string().max(1000).optional() }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: 'Resultado inválido.' });
   const extractedResult = parsed.data.result?.extracted && typeof parsed.data.result.extracted === 'object' ? parsed.data.result.extracted : {};
   const { password: _password, ...safeExtractedResult } = extractedResult;

@@ -29,3 +29,12 @@ test('identifica id de grupo pelo tamanho', () => {
   assert.equal(looksLikeGroupPhone('120363025246125486'), true);
   assert.equal(looksLikeGroupPhone('5516999999999'), false);
 });
+
+
+test('lista explícita restringe comprovantes ao Financeiro sem liberar vendas', () => {
+  const exclusive = { ...config, evolutionFinanceInstance: 'Financeiro', evolutionReceiptInstances: ['Financeiro'] };
+  const key = { remoteJid: '5516999999999@s.whatsapp.net' };
+  assert.equal(receiptRejectionReason(evolutionInboundMedia(body(key, 'Financeiro')), exclusive), null);
+  assert.equal(receiptRejectionReason(evolutionInboundMedia(body(key)), exclusive), 'instance_not_allowed');
+  assert.equal(receiptRejectionReason(evolutionInboundMedia(body(key, 'Financeiro')), { ...exclusive, evolutionReceiptInstances: [] }), 'no_receipt_instance_configured');
+});

@@ -2,6 +2,15 @@ import { chatCompletion, listModels } from '../llm.js';
 
 const httpUrl = (z) => z.string().trim().url().max(300).refine((value) => /^https?:\/\//i.test(value), 'Use http(s).');
 
+export function aiTestErrorMessage(error) {
+  const message = String(error?.message || '');
+  if (/playwright|browsers\.json|executable doesn't exist/i.test(message)) return 'O navegador usado pelo provedor não está instalado corretamente no OmniRoute. Repare a instalação do Playwright/Chromium.';
+  if (/timeout|timed out|aborted/i.test(message) || error?.name === 'TimeoutError') return 'O modelo excedeu o tempo do teste. Tente novamente ou selecione outro modelo.';
+  if (error?.statusCode === 401 || error?.statusCode === 403) return 'O OmniRoute recusou a chave ou o acesso a este modelo. Confira as permissões da chave.';
+  if (error?.statusCode === 429) return 'O provedor está sem cota ou no limite de requisições. Aguarde ou selecione outro modelo.';
+  return `O provedor não concluiu o teste${error?.statusCode ? ` (HTTP ${error.statusCode})` : ''}. Verifique a conexão deste provedor no OmniRoute.`;
+}
+
 export function registerAiSettingsRoutes(app, { requireOwnerUser, aiSettings, z, fetchImpl }) {
   const modelField = z.string().trim().max(160).nullable().optional();
   const saveSchema = z.object({
@@ -67,7 +76,8 @@ export function registerAiSettingsRoutes(app, { requireOwnerUser, aiSettings, z,
       }
       return response.json({ ok: true, models, model_count: models.length, latency_ms: Date.now() - startedAt, chat });
     } catch (error) {
-      return response.status(502).json({ ok: false, error: error.message.slice(0, 300) });
+      // Falha de um teste é um resultado; proxies podem substituir respostas 502 por HTML.
+      return response.json({ ok: false, error: aiTestErrorMessage(error), upstream_status: error.statusCode || null });
     }
   });
 }

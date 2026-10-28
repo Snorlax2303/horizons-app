@@ -20,6 +20,7 @@ export function getConfig() {
     evolutionInstance: process.env.EVOLUTION_INSTANCE,
     evolutionSalesInstance: process.env.EVOLUTION_SALES_INSTANCE || process.env.N8N_EVOLUTION_INSTANCE || 'Horizons Typebot',
     evolutionSupportInstance: process.env.EVOLUTION_SUPPORT_INSTANCE || '',
+    evolutionReceiptInstances: process.env.HORIZONS_RECEIPT_INSTANCES === undefined ? null : String(process.env.HORIZONS_RECEIPT_INSTANCES).split(',').map(value => value.trim()).filter(Boolean),
     evolutionFinanceInstance: process.env.EVOLUTION_FINANCE_INSTANCE || '',
     supportConversationCaptureEnabled: process.env.SUPPORT_CONVERSATION_CAPTURE_ENABLED === 'true',
     evolutionWebhookToken: process.env.EVOLUTION_WEBHOOK_TOKEN,

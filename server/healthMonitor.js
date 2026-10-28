@@ -33,7 +33,7 @@ async function evolutionInstances(config, fetchImpl) {
     return {
       items: list.map((item) => ({
         name: item.name || item.instanceName || 'sem nome',
-        state: item.connectionStatus || item.state || item.status || 'unknown',
+        state: item.connectionStatus || item.connectionState || item.state || item.status || 'unknown',
         updated_at: item.updatedAt || null,
       })),
     };
@@ -63,9 +63,12 @@ export async function collectHealthSignals({ config, supabase, aiSettings, setti
     }
   }
 
-  const { data: lastInbound, error: inboundError } = await supabase.from('lead_events').select('created_at')
+  const safeQuery = (query) => Promise.resolve(query).catch(() => ({ error: { code: 'unreachable' } }));
+  const databaseFailures = [];
+  const { data: lastInbound, error: inboundError } = await safeQuery(supabase.from('lead_events').select('created_at')
     .eq('user_id', config.horizonsOwnerUserId).eq('event_type', 'whatsapp_inbound')
-    .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    .order('created_at', { ascending: false }).limit(1).maybeSingle());
+  if (inboundError) databaseFailures.push('inbound');
   signals.last_inbound_at = lastInbound?.created_at || null;
   if (!inboundError && lastInbound?.created_at) {
     const silentHours = (now - new Date(lastInbound.created_at).getTime()) / HOUR;
@@ -77,20 +80,31 @@ export async function collectHealthSignals({ config, supabase, aiSettings, setti
 
   const since = new Date(now - 24 * HOUR).toISOString();
   const [failed, total] = await Promise.all([
-    supabase.from('pix_receipts').select('id', { count: 'exact', head: true }).eq('extraction_status', 'failed').gte('created_at', since),
-    supabase.from('pix_receipts').select('id', { count: 'exact', head: true }).gte('created_at', since),
+    safeQuery(supabase.from('pix_receipts').select('id', { count: 'exact', head: true }).eq('user_id', config.horizonsOwnerUserId).eq('extraction_status', 'failed').gte('created_at', since)),
+    safeQuery(supabase.from('pix_receipts').select('id', { count: 'exact', head: true }).eq('user_id', config.horizonsOwnerUserId).gte('created_at', since)),
   ]);
-  signals.receipts_24h = { failed: failed.count || 0, total: total.count || 0 };
-  if ((failed.count || 0) >= settings.receiptFailureMin && (failed.count || 0) > (total.count || 0) / 2) {
+  if (failed.error || total.error) databaseFailures.push('receipts');
+  signals.receipts_24h = { failed: failed.error ? null : failed.count ?? 0, total: total.error ? null : total.count ?? 0 };
+  if (!failed.error && !total.error && (failed.count || 0) >= settings.receiptFailureMin && (failed.count || 0) > (total.count || 0) / 2) {
     problems.push({ key: 'receipts:failing', severity: 'medium', text: `Leitura de comprovantes falhou em ${failed.count} de ${total.count} nas últimas 24 h.` });
   }
 
   if (aiSettings) {
-    const ai = await aiSettings.resolve().catch(() => null);
-    signals.ai_configured = Boolean(ai?.apiKey && ai?.baseUrl && (ai.models?.fast || ai.models?.smart || ai.models?.vision));
-    if (!signals.ai_configured) {
-      problems.push({ key: 'ai:not_configured', severity: 'low', text: 'IA (OmniRoute) sem chave/modelos: salve em Configurações.' });
+    try {
+      const ai = await aiSettings.resolve();
+      signals.ai_configured = Boolean(ai?.apiKey && ai?.baseUrl && (ai.models?.fast || ai.models?.smart || ai.models?.vision));
+      if (!signals.ai_configured) {
+        problems.push({ key: 'ai:not_configured', severity: 'low', text: 'IA (OmniRoute) sem chave/modelos: salve em Configurações.' });
+      }
+    } catch {
+      signals.ai_configured = null;
+      databaseFailures.push('ai_settings');
     }
+  }
+
+  signals.database = { status: databaseFailures.length ? 'error' : 'ok', failed_checks: databaseFailures };
+  if (databaseFailures.length) {
+    problems.push({ key: 'database:unavailable', severity: 'high', text: 'Falha ao consultar o banco do Horizons. Verifique disponibilidade do Supabase e conexão da aplicação.' });
   }
 
   signals.problems = problems;

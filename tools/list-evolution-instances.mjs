@@ -23,6 +23,6 @@ const payload = await response.json();
 const instances = Array.isArray(payload) ? payload : payload?.data || [];
 for (const instance of instances) {
   const name = instance.instanceName || instance.name || 'sem nome';
-  const state = instance.connectionState || instance.state || instance.status || 'desconhecido';
+  const state = instance.connectionStatus || instance.connectionState || instance.state || instance.status || 'desconhecido';
   console.log(`${name}\t${state}`);
 }

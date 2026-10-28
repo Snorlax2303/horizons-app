@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Helmet } from 'react-helmet';
 import { Save, Server, Wifi, Brain, PlugZap, Trash2, CheckCircle2, XCircle } from 'lucide-react';
 import Button from '@/components/Common/Button';
@@ -16,7 +16,22 @@ const PROFILES = [
 
 const SOURCE_LABEL = { panel: 'chave salva pelo painel', env: 'chave do arquivo .env', none: 'nenhuma chave configurada' };
 
-const emptyForm = { base_url: '', api_key: '', models: { fast: '', smart: '', vision: '' }, fallback_models: '' };
+const emptyForm = { base_url: '', api_key: '', models: { fast: '', smart: '', vision: '' }, fallback_models: [] };
+
+const modelSelectClass = 'w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-green-500 outline-none disabled:opacity-50';
+
+function ModelSelect({ id, label, value, models, onChange, disabled, filter = '', placeholder = 'Selecione um modelo' }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-sm font-medium text-gray-700 dark:text-gray-200">{label}</label>
+      <select id={id} className={modelSelectClass} value={value} onChange={onChange} disabled={disabled}>
+        <option value="">{placeholder}</option>
+        {value && !models.includes(value) && <option value={value}>{value} (salvo; fora da lista atual)</option>}
+        {models.filter(model => model === value || model.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase())).map(model => <option key={model} value={model}>{model}</option>)}
+      </select>
+    </div>
+  );
+}
 
 function AiSettingsCard() {
   const { success, error } = useToastNotification();
@@ -27,6 +42,9 @@ function AiSettingsCard() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [availableModels, setAvailableModels] = useState([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelFilter, setModelFilter] = useState('');
+  const catalogRequest = useRef(0);
   const [testResult, setTestResult] = useState(null);
   const [modelChecks, setModelChecks] = useState({});
 
@@ -36,48 +54,66 @@ function AiSettingsCard() {
       base_url: data.base_url || '',
       api_key: '',
       models: { fast: data.models?.fast || '', smart: data.models?.smart || '', vision: data.models?.vision || '' },
-      fallback_models: (data.fallback_models || []).join(', '),
+      fallback_models: data.fallback_models || [],
     });
+  }, []);
+
+  const loadModels = useCallback(async (credentials) => {
+    const requestId = ++catalogRequest.current;
+    setModelsLoading(true);
+    setTestResult(null);
+    setAvailableModels([]);
+    try {
+      const result = await horizonsApi('/settings/ai/test', { method: 'POST', body: JSON.stringify(credentials) });
+      if (requestId !== catalogRequest.current) return;
+      if (!result.ok) throw new Error(result.error || 'Não foi possível carregar os modelos.');
+      const models = [...new Set((result.models || []).filter(model => typeof model === 'string' && model.trim()))].sort();
+      setAvailableModels(models);
+      setTestResult({ ok: models.length > 0, text: models.length
+        ? `${models.length} modelos carregados. Selecione nas listas abaixo.`
+        : 'O OmniRoute não retornou modelos para esta chave. Verifique as permissões e tente novamente.' });
+    } catch (err) {
+      if (requestId === catalogRequest.current) setTestResult({ ok: false, text: err.message });
+    } finally {
+      if (requestId === catalogRequest.current) setModelsLoading(false);
+    }
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      applyView(await horizonsApi('/settings/ai'));
+      const data = await horizonsApi('/settings/ai');
+      applyView(data);
       setForbidden(false);
+      if (data.has_key) void loadModels({ base_url: data.base_url || undefined });
     } catch (err) {
       if (/propriet/i.test(err.message)) setForbidden(true);
       else error('Erro ao carregar IA', err.message);
     } finally {
       setLoading(false);
     }
-  }, [applyView, error]);
+  }, [applyView, error, loadModels]);
 
   useEffect(() => { load(); }, [load]);
 
   const setModel = (key, value) => setForm((current) => ({ ...current, models: { ...current.models, [key]: value } }));
+  const fallbackList = () => form.fallback_models;
 
-  const fallbackList = () => form.fallback_models.split(',').map((item) => item.trim()).filter(Boolean);
-
-  const testConnection = async () => {
-    setTesting(true);
+  const setCredential = (key, value) => {
+    ++catalogRequest.current;
+    setModelsLoading(false);
+    setAvailableModels([]);
     setTestResult(null);
-    try {
-      const body = { base_url: form.base_url || undefined, api_key: form.api_key || undefined };
-      const result = await horizonsApi('/settings/ai/test', { method: 'POST', body: JSON.stringify(body) });
-      setAvailableModels(result.models || []);
-      setTestResult({ ok: true, text: `Conectado em ${result.latency_ms} ms — ${result.model_count} modelos disponíveis.` });
-    } catch (err) {
-      setTestResult({ ok: false, text: err.message });
-    } finally {
-      setTesting(false);
-    }
+    setModelChecks({});
+    setForm(current => ({ ...current, [key]: value }));
   };
+
+  const testConnection = () => loadModels({ base_url: form.base_url.trim() || undefined, api_key: form.api_key.trim() || undefined });
 
   const testModels = async () => {
     const models = [...new Set([...Object.values(form.models), ...fallbackList()].filter(Boolean))];
     if (!models.length) {
-      error('Nenhum modelo', 'Preencha pelo menos um modelo.');
+      error('Nenhum modelo', 'Selecione pelo menos um modelo nas listas.');
       return;
     }
     setTesting(true);
@@ -86,6 +122,7 @@ function AiSettingsCard() {
       try {
         const body = { base_url: form.base_url || undefined, api_key: form.api_key || undefined, model };
         const result = await horizonsApi('/settings/ai/test', { method: 'POST', body: JSON.stringify(body) });
+        if (!result.ok) throw new Error(result.error || 'O modelo não concluiu o teste.');
         results[model] = { ok: true, text: `ok em ${result.chat?.latency_ms ?? '?'} ms` };
       } catch (err) {
         results[model] = { ok: false, text: err.message };
@@ -123,6 +160,10 @@ function AiSettingsCard() {
     setSaving(true);
     try {
       applyView(await horizonsApi('/settings/ai', { method: 'PUT', body: JSON.stringify({ clear_key: true }) }));
+      ++catalogRequest.current;
+      setAvailableModels([]);
+      setModelsLoading(false);
+      setTestResult(null);
       success('Chave removida', 'A chave salva no painel foi apagada.');
     } catch (err) {
       error('Erro ao remover', err.message);
@@ -165,7 +206,7 @@ function AiSettingsCard() {
           <Input
             label="URL da API do OmniRoute"
             value={form.base_url}
-            onChange={(event) => setForm((current) => ({ ...current, base_url: event.target.value }))}
+            onChange={(event) => setCredential('base_url', event.target.value)}
             placeholder="http://host.docker.internal:20129/v1"
           />
           <div className="space-y-1">
@@ -174,32 +215,45 @@ function AiSettingsCard() {
               type="password"
               autoComplete="new-password"
               value={form.api_key}
-              onChange={(event) => setForm((current) => ({ ...current, api_key: event.target.value }))}
+              onChange={(event) => setCredential('api_key', event.target.value)}
               placeholder={view?.has_key ? `Deixe em branco para manter a chave salva (${view.key_hint})` : 'Cole aqui a chave criada no OmniRoute'}
             />
-            <p className="text-xs text-gray-500">A chave é cifrada na VPS e nunca volta para o navegador; só os 4 últimos caracteres são exibidos.</p>
+            <p className="text-xs text-gray-500" role="status">
+              {form.api_key
+                ? 'Nova chave digitada. Clique em Salvar configuração de IA para gravar.'
+                : view?.has_key
+                  ? 'Chave salva. O campo fica vazio por segurança; deixe assim para manter a chave atual.'
+                  : 'Nenhuma chave salva. Cole a chave e clique em Salvar configuração de IA.'}
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-3">
-            <Button type="button" variant="outline" icon={PlugZap} onClick={testConnection} loading={testing}>Testar conexão</Button>
+            <Button type="button" variant="outline" icon={PlugZap} onClick={testConnection} loading={modelsLoading} disabled={loading || saving || testing || (!view?.has_key && !form.api_key.trim())}>{availableModels.length ? 'Atualizar lista de modelos' : 'Carregar modelos'}</Button>
             {testResult && (
               <span className={`text-sm self-center ${testResult.ok ? 'text-green-700 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>{testResult.text}</span>
             )}
           </div>
 
-          <datalist id="omniroute-models">
-            {availableModels.map((model) => <option key={model} value={model} />)}
-          </datalist>
+          {!availableModels.length && !modelsLoading && !testResult && (
+            <p className="text-sm text-gray-500">Cole sua chave e clique em Carregar modelos para selecionar, sem digitar nomes.</p>
+          )}
+          {modelsLoading && <p className="text-sm text-gray-500" role="status">Carregando modelos do OmniRoute…</p>}
+
+          {availableModels.length > 0 && <Input id="ai-model-filter" label="Filtrar lista de modelos"
+            value={modelFilter} onChange={event => setModelFilter(event.target.value)} placeholder="Buscar por nome ou provedor" />}
 
           <div className="grid gap-4 md:grid-cols-3">
             {PROFILES.map((profile) => (
               <div key={profile.key} className="space-y-1">
-                <Input
+                <ModelSelect
+                  id={`ai-model-${profile.key}`}
                   label={profile.label}
-                  list="omniroute-models"
+                  models={availableModels}
+                  filter={modelFilter}
+                  disabled={loading || modelsLoading || !availableModels.length}
                   value={form.models[profile.key]}
                   onChange={(event) => setModel(profile.key, event.target.value)}
-                  placeholder={availableModels.length ? 'Escolha um modelo' : 'Teste a conexão para listar'}
+                  placeholder={availableModels.length ? 'Selecione um modelo' : 'Carregue a lista de modelos'}
                 />
                 <p className="text-xs text-gray-500">{profile.help}</p>
                 {check(form.models[profile.key]) && (
@@ -209,17 +263,28 @@ function AiSettingsCard() {
             ))}
           </div>
 
-          <div className="space-y-1">
-            <Input
-              label="Modelos de reserva (fallback), separados por vírgula"
-              value={form.fallback_models}
-              onChange={(event) => setForm((current) => ({ ...current, fallback_models: event.target.value }))}
-              placeholder="Ex.: um modelo GPT como reserva do Claude"
-            />
-            <p className="text-xs text-gray-500">Usados em ordem quando o modelo principal falha ou responde fora do formato (máx. 5).</p>
-            {fallbackList().filter((model) => check(model)).map((model) => (
-              <p key={model} className={`text-xs ${check(model).ok ? 'text-green-700' : 'text-red-600'}`}>{model}: {check(model).text}</p>
+          <div className="space-y-3">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Modelos de reserva (opcional)</p>
+            <p className="text-xs text-gray-500">Usados nesta ordem quando o modelo principal falha (máx. 5).</p>
+            {form.fallback_models.map((model, index) => (
+              <div key={index} className="flex items-end gap-2">
+                <div className="flex-1">
+                  <ModelSelect id={`ai-fallback-${index}`} label={`Reserva ${index + 1}`} value={model}
+                    filter={modelFilter} models={availableModels.filter(candidate => candidate === model || !form.fallback_models.includes(candidate))}
+                    disabled={loading || modelsLoading || !availableModels.length}
+                    onChange={event => setForm(current => ({ ...current, fallback_models: current.fallback_models.map((item, slot) => slot === index ? event.target.value : item).filter(Boolean) }))}
+                    placeholder="Remover esta reserva" />
+                </div>
+                <Button type="button" variant="outline" aria-label={`Remover reserva ${index + 1}`} disabled={saving || testing}
+                  onClick={() => setForm(current => ({ ...current, fallback_models: current.fallback_models.filter((_, slot) => slot !== index) }))}>Remover</Button>
+              </div>
             ))}
+            {form.fallback_models.length < 5 && <ModelSelect id="ai-fallback-add" label="Adicionar modelo de reserva" value=""
+              filter={modelFilter} models={availableModels.filter(model => !form.fallback_models.includes(model))}
+              disabled={loading || modelsLoading || !availableModels.length}
+              onChange={event => { const model = event.target.value; if (model) setForm(current => ({ ...current, fallback_models: [...current.fallback_models, model] })); }}
+              placeholder="Selecione para adicionar" />}
+            {fallbackList().filter(model => check(model)).map(model => <p key={model} className={`text-xs ${check(model).ok ? 'text-green-700' : 'text-red-600'}`}>{model}: {check(model).text}</p>)}
           </div>
 
           <div className="flex flex-wrap justify-between gap-3 pt-4 border-t border-gray-100 dark:border-gray-800">

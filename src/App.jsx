@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { ConfigProvider } from '@/contexts/ConfigContext';
@@ -6,33 +6,33 @@ import { ThemeProvider } from '@/contexts/ThemeContext';
 import { KeepAliveProvider } from '@/contexts/KeepAliveContext';
 import MainLayout from '@/components/Layout/MainLayout';
 import LoadingSpinner from '@/components/Common/LoadingSpinner';
-import Login from '@/pages/Login';
-import LeadPublico from '@/pages/LeadPublico';
-import Dashboard from '@/pages/Dashboard';
-import CentralOperacional from '@/pages/CentralOperacional';
-import Clientes from '@/pages/Clientes';
-import Prospects from '@/pages/Prospects';
-import Testes from '@/pages/Testes';
-import ManuaisInstalacao from '@/pages/ManuaisInstalacao';
-import Captacao from '@/pages/Captacao';
-import Indicacoes from '@/pages/Indicacoes';
-import CobrancasPix from '@/pages/CobrancasPix';
-import Renovacoes from '@/pages/Renovacoes';
-import AssistenteAdmin from '@/pages/AssistenteAdmin';
-import Servidores from '@/pages/Servidores';
-import ConexoesPaineis from '@/pages/ConexoesPaineis';
-import OperacoesPaineis from '@/pages/OperacoesPaineis';
-import ProcedimentosPaineis from '@/pages/ProcedimentosPaineis';
-import Planos from '@/pages/Planos';
-import Importacao from '@/pages/Importacao';
-import Configuracoes from '@/pages/Configuracoes';
-import PhoneNumberRepairPage from '@/pages/PhoneNumberRepairPage';
-import SaudeIntegracoes from '@/pages/SaudeIntegracoes';
-import LogsAuditoria from '@/pages/LogsAuditoria';
-import RevisaoFinanceira from '@/pages/RevisaoFinanceira';
-import BaixaPagamentos from '@/pages/BaixaPagamentos';
-import NovoAcessoWizard from '@/pages/NovoAcessoWizard';
-import WplayPanel from '@/pages/WplayPanel';
+const Login = lazy(() => import('@/pages/Login'));
+const LeadPublico = lazy(() => import('@/pages/LeadPublico'));
+const Dashboard = lazy(() => import('@/pages/Dashboard'));
+const CentralOperacional = lazy(() => import('@/pages/CentralOperacional'));
+const Clientes = lazy(() => import('@/pages/Clientes'));
+const Prospects = lazy(() => import('@/pages/Prospects'));
+const Testes = lazy(() => import('@/pages/Testes'));
+const ManuaisInstalacao = lazy(() => import('@/pages/ManuaisInstalacao'));
+const Captacao = lazy(() => import('@/pages/Captacao'));
+const Indicacoes = lazy(() => import('@/pages/Indicacoes'));
+const CobrancasPix = lazy(() => import('@/pages/CobrancasPix'));
+const Renovacoes = lazy(() => import('@/pages/Renovacoes'));
+const AssistenteAdmin = lazy(() => import('@/pages/AssistenteAdmin'));
+const Servidores = lazy(() => import('@/pages/Servidores'));
+const ConexoesPaineis = lazy(() => import('@/pages/ConexoesPaineis'));
+const OperacoesPaineis = lazy(() => import('@/pages/OperacoesPaineis'));
+const ProcedimentosPaineis = lazy(() => import('@/pages/ProcedimentosPaineis'));
+const Planos = lazy(() => import('@/pages/Planos'));
+const Importacao = lazy(() => import('@/pages/Importacao'));
+const Configuracoes = lazy(() => import('@/pages/Configuracoes'));
+const PhoneNumberRepairPage = lazy(() => import('@/pages/PhoneNumberRepairPage'));
+const SaudeIntegracoes = lazy(() => import('@/pages/SaudeIntegracoes'));
+const LogsAuditoria = lazy(() => import('@/pages/LogsAuditoria'));
+const RevisaoFinanceira = lazy(() => import('@/pages/RevisaoFinanceira'));
+const BaixaPagamentos = lazy(() => import('@/pages/BaixaPagamentos'));
+const NovoAcessoWizard = lazy(() => import('@/pages/NovoAcessoWizard'));
+const WplayPanel = lazy(() => import('@/pages/WplayPanel'));
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -116,6 +116,7 @@ function App() {
           <ConfigProvider>
             <KeepAliveProvider>
               <BrowserRouter>
+                <Suspense fallback={<LoadingSpinner fullScreen size="lg" />}>
                 <Routes>
                   <Route path="/lead" element={<LeadPublico />} />
                   <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
@@ -133,6 +134,7 @@ function App() {
                   </Route>
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
+                </Suspense>
               </BrowserRouter>
             </KeepAliveProvider>
           </ConfigProvider>
